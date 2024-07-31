@@ -1,0 +1,17 @@
+services:
+  mysql_service:
+    restart: always
+    image: mysql:9.0.1
+    volumes:
+      - mysql_volume:/var/lib/mysql
+      - ./secrets/mysql:/secrets/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: "/secrets/mysql/root_password.txt"
+      MYSQL_DATABASE_FILE: "/secrets/mysql/database.txt"
+      MYSQL_USER_FILE: "/secrets/mysql/user.txt"
+      MYSQL_PASSWORD_FILE: "/secrets/mysql/password.txt"
+    ports:
+      - "3306:3306"
+
+volumes:
+  mysql_volume:
