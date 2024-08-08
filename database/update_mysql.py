@@ -1,11 +1,17 @@
 from database.init_mysql import execute_query
 
 
-def create_new_user(connection, name, tg_id):
-    query = (
-        "INSERT INTO users (Name, TelegramID) VALUES "
-        f"( \"{name}\", \"{tg_id}\" )"
-    )
+def create_new_user(connection, name, tg_id, time_zone=None):
+    if time_zone is not None:
+        query = (
+            "INSERT INTO users (Name, TelegramID, TimeZone) VALUES "
+            f"( \"{name}\", \"{tg_id}\", \"{time_zone}\" )"
+        )
+    else:
+        query = (
+            "INSERT INTO users (Name, TelegramID) VALUES "
+            f"( \"{name}\", \"{tg_id}\" )"
+        )
     execute_query(connection, query)
     connection.commit()
 
