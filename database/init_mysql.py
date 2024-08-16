@@ -1,6 +1,6 @@
-from mysql.connector import connect
 from database import config
-from database.common_mysql import execute_query, use_database, does_table_exist
+from database.common_mysql import execute_query, use_database
+from database.select_mysql import does_table_exist
 
 
 def create_database(connection):

@@ -30,8 +30,8 @@ def user_keyboard_markup():
     return user_markup
 
 
-
-sql_connection = database.open_connection()
+# TODO cleanup test code
+sql_connection = database.get_connection()
 database.use_database(sql_connection)
 
 

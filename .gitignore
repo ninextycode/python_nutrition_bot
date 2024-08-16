@@ -4,3 +4,4 @@ data
 activate
 .idea
 __pycache__
+test.py

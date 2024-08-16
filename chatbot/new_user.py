@@ -5,12 +5,13 @@ from enum import Enum
 import dateparser
 import timezonefinder
 import pint
+from chatbot.config import NEW_USER_COMMAND, u_reg
+import pytz
+from dateutil import tz
+from database import update_mysql, common_mysql
+import re
 
-from pint import UnitRegistry, PintError
-import pint
 
-NEW_USER_COMMAND = "new_user"
-u_reg = pint.UnitRegistry()
 timezone_finder = timezonefinder.TimezoneFinder(in_memory=True)
 goals = [
     "lose weight",
@@ -19,6 +20,7 @@ goals = [
     "gain muscle slowly",
     "gain muscle",
 ]
+
 
 class NewUserStages(Enum):
     CONFIRM_NAME = 0
@@ -35,7 +37,7 @@ class NewUserStages(Enum):
 def get_new_user_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     handler = ConversationHandler(
-        entry_points=[CommandHandler("new_user", on_new_user)],
+        entry_points=[CommandHandler(NEW_USER_COMMAND, on_new_user)],
         states={
             NewUserStages.CONFIRM_NAME: [MessageHandler(text_only_filter, on_confirm_name)],
             NewUserStages.NAME: [MessageHandler(text_only_filter, on_name)],
@@ -119,7 +121,7 @@ async def on_gender(update, context):
     context.user_data["is_male"] = gender == "male"
     await update.message.reply_text(
         "What is your date of birth? \n" +
-        "(DD/MM/YYYY)",
+        "(Day/Month/Year)",
         reply_markup=ReplyKeyboardRemove()
     )
     return NewUserStages.DATE_OF_BIRTH
@@ -158,24 +160,34 @@ def location_markup():
 
 async def on_timezone(update, context):
     user_location = update.message.location
-    request_location_again = False
-    if user_location is None:
-        request_location_again = True
 
-    timezone = None
-    if not request_location_again:
+    timezone_str = None
+
+    if user_location is not None:
         try:
-            timezone = timezone_finder.timezone_at(lng=user_location.longitude, lat=user_location.latitude)
+            timezone_str = timezone_finder.timezone_at(
+                lng=user_location.longitude,
+                lat=user_location.latitude
+            )
         except Exception as e:
-            request_location_again = True
+            pass
+    else:
+        timezone_str = update.message.text
 
-    if request_location_again:
+    if timezone_str is not None:
+        timezone_obj = tz.gettz(timezone_str)
+    else:
+        timezone_obj = None
+
+    if timezone_obj is not None:
+        context.user_data["time_zone"] = timezone_str
+    else:
         await update.message.reply_text(
             "Problem with location data, try again", reply_markup=location_markup()
         )
         return NewUserStages.TIMEZONE
 
-    await update.message.reply_text(f"Your timezone is {timezone}", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(f"Your timezone is {timezone_str}", reply_markup=ReplyKeyboardRemove())
     await update.message.reply_text("What is your height?")
     return NewUserStages.HEIGHT
 
@@ -198,20 +210,28 @@ async def on_height(update, context):
 
 def get_height_cm(height_str):
     height_str = height_str.lower()
+
+    feet_match = re.search(r"(\d+)'(\d+)?\"?", height_str)
+    if feet_match:
+        feet = feet_match.group(1)
+        inches = feet_match.group(2) if feet_match.group(2) else "0"
+        height_str = f"{feet} feet + {inches} inches "
+
     try:
         height_with_unit = u_reg(height_str)
-        # deduce unit from the magnitude
-        if not isinstance(height_with_unit, pint.Quantity):
-            if height_with_unit < 3:
-                height_with_unit = height_with_unit * u_reg("m")
-            elif height_with_unit < 9:
-                height_with_unit = height_with_unit * u_reg("ft")
-            elif 90 < height_with_unit < 300:
-                height_with_unit = height_with_unit * u_reg("cm")
-            else:
-                return None
     except pint.PintError:
         return None
+
+    # deduce unit from the magnitude
+    if not isinstance(height_with_unit, pint.Quantity):
+        if height_with_unit < 3:
+            height_with_unit = height_with_unit * u_reg("m")
+        elif height_with_unit < 9:
+            height_with_unit = height_with_unit * u_reg("ft")
+        elif 90 < height_with_unit < 300:
+            height_with_unit = height_with_unit * u_reg("cm")
+        else:
+            return None
 
     height_cm = height_with_unit.to("cm").magnitude
     good_height = 90 < height_cm < 300
@@ -280,20 +300,34 @@ async def process_new_user_data(update, context):
     name = user_data["name"]
     gender = "male" if user_data["is_male"] else "female"
     date_of_birth = user_data["date_of_birth"].strftime("%d/%m/%Y")
-    height = f"{int(round(user_data["height"]))} cm"
-    weight = f"{round(user_data["weight"], 1)} kg"
+    height = user_data["height"]
+    weight = user_data["weight"]
     goal = user_data["goal"]
+    time_zone = user_data["time_zone"]
+    tg_id = update.message.from_user.id
 
     summary = (
         "New User Data:\n"
         f" - name: {name}\n"
         f" - gender: {gender}\n"
         f" - date_of_birth: {date_of_birth}\n"
-        f" - height: {height}\n"
-        f" - weight: {weight}\n"
-        f" - goal: {goal}"
+        f" - height: {int(round(height))} cm\n"
+        f" - weight: {round(weight)} kg\n"
+        f" - goal: {goal}\n"
+        f" - goal: {time_zone}\n"
+        f" - unique telegram id: {tg_id}\n"
+        "wait for your account to be approved"
     )
 
+    connection = common_mysql.get_connection()
+    update_mysql.create_new_user(
+        connection,
+        name, gender,
+        goal,
+        weight, height,
+        tg_id, time_zone
+    )
+    connection.close()
 
     await update.message.reply_text(summary, reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END

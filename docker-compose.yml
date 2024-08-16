@@ -1,6 +1,6 @@
 services:
   mysql_service:
-    restart: always
+    restart: unless-stopped
     image: mysql:9.0.1
     volumes:
       - mysql_volume:/var/lib/mysql
