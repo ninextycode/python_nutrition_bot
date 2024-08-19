@@ -55,7 +55,7 @@ def get_new_user_conversation_handler():
 
     fallbacks = [
         CommandHandler("cancel", on_cancel),
-        # MessageHandler(filters.COMMAND, quiet_cancel)
+        MessageHandler(filters.COMMAND, on_cancel)
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
