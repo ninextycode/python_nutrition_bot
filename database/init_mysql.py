@@ -21,7 +21,7 @@ def create_user_table(connection):
         "GoalID INT UNSIGNED NOT NULL, "
         "Weight DECIMAL(5, 1) NOT NULL CHECK (Weight >= 0), "
         "Height INT UNSIGNED NOT NULL, "
-        
+        "DateOfBirth DATE NOT NULL,"
         "FOREIGN KEY (TimeZoneID) REFERENCES timezones(ID), "
         "FOREIGN KEY (GenderID) REFERENCES genders(ID), "
         "FOREIGN KEY (GoalID) REFERENCES goals(ID)"
