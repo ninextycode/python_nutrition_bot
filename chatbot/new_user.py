@@ -437,12 +437,14 @@ async def process_new_user_data(update, context):
 
 async def on_cancel(update, context):
     if updating_existing_user(context.user_data):
+        command_type = "Update "
         again_command = f"/{Commands.UPDATE_USER}"
     else:
+        command_type = "Registration "
         again_command = f"/{Commands.NEW_USER}"
 
     await update.message.reply_text(
-        "Cancelled. " +
+        f"{command_type} cancelled. " +
         f"Use {again_command} command to start again!",
         reply_markup=ReplyKeyboardRemove()
     )
