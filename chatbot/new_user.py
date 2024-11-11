@@ -9,6 +9,7 @@ from chatbot.config import Commands, u_reg
 from dateutil import tz
 from database import update_mysql, common_mysql, select_mysql
 from chatbot import new_user_misc
+from chatbot import dialog_utils
 import logging
 import re
 
@@ -33,6 +34,9 @@ class UpdateUserMode(Enum):
     UPDATE = 1
 
 
+USER_DATA = ""
+
+
 def get_new_user_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
@@ -50,6 +54,7 @@ def get_new_user_conversation_handler():
         NewUserStages.WEIGHT: [MessageHandler(text_only_filter, on_weight)],
         NewUserStages.GOAL: [MessageHandler(text_only_filter, on_goal)]
     }
+    # allows to restart dialog from the middle
     for k in states.keys():
         states[k].extend(entry_points)
 
@@ -66,8 +71,9 @@ def get_new_user_conversation_handler():
 
 
 async def on_update_user(update, context):
-    context.user_data.clear()
-    context.user_data["mode"] = UpdateUserMode.UPDATE
+    context.user_data[USER_DATA] = dict()
+    user_data = context.user_data[USER_DATA]
+    user_data["mode"] = UpdateUserMode.UPDATE
 
     tg_id = update.message.from_user.id
 
@@ -86,11 +92,11 @@ async def on_update_user(update, context):
 
     dob = existing_user_data["DateOfBirth"]
     existing_user_data["DateOfBirth"] = dob.strftime('%d/%m/%Y')
-    context.user_data["existing_user_data"] = existing_user_data
+    user_data["existing_user_data"] = existing_user_data
 
-    context.user_data["name"] = existing_user_data["Name"]
+    user_data["name"] = existing_user_data["Name"]
     await update.message.reply_text(
-        f"Hi {context.user_data['name']}! Let's update user data. \n" +
+        f"Hi {user_data['name']}! Let's update user data. \n" +
         "Is this your correct name?",
         reply_markup=new_user_misc.yes_no_markup(),
     )
@@ -98,8 +104,9 @@ async def on_update_user(update, context):
 
 
 async def on_new_user(update, context):
-    context.user_data.clear()
-    context.user_data["mode"] = UpdateUserMode.NEW
+    context.user_data[USER_DATA] = dict()
+    user_data = context.user_data[USER_DATA]
+    user_data["mode"] = UpdateUserMode.NEW
 
     tg_id = update.message.from_user.id
 
@@ -121,9 +128,9 @@ async def on_new_user(update, context):
         return ConversationHandler.END
 
     name = update.effective_user.first_name
-    context.user_data["name"] = name
+    user_data["name"] = name
     await update.message.reply_text(
-        f"Hi {context.user_data['name']}!  Let's set up a new user. \n" +
+        f"Hi {user_data['name']}! Let's set up a new user. \n" +
         "Is this your correct name?",
         reply_markup=new_user_misc.yes_no_markup(),
     )
@@ -131,22 +138,24 @@ async def on_new_user(update, context):
 
 
 async def on_confirm_name(update, context):
+    user_data = context.user_data[USER_DATA]
     confirm = update.message.text
     if confirm not in ("yes", "no"):
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await update.message.reply_text(
             "Is this your correct name?",
             reply_markup=new_user_misc.yes_no_markup()
         )
+        return NewUserStages.CONFIRM_NAME
     confirmed = (confirm == "yes")
 
     if confirmed:
         await new_user_misc.gender_question(update)
         return NewUserStages.GENDER
 
-    if updating_existing_user(context.user_data):
+    if updating_existing_user(user_data):
         tg_name = update.effective_user.first_name
-        existing_name = context.user_data["existing_user_data"]["Name"]
+        existing_name = user_data["existing_user_data"]["Name"]
         old_names = [tg_name, existing_name]
     else:
         old_names = []
@@ -163,7 +172,7 @@ async def on_name(update, context):
         return NewUserStages.NAME
 
     if len(name) == 0:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         return NewUserStages.NAME
 
     await new_user_misc.gender_question(update)
@@ -171,16 +180,17 @@ async def on_name(update, context):
 
 
 async def on_gender(update, context):
+    user_data = context.user_data[USER_DATA]
     gender = update.message.text
     if gender not in ("male", "female"):
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await new_user_misc.gender_question(update)
         return NewUserStages.GENDER
 
-    context.user_data["is_male"] = gender == "male"
+    user_data["is_male"] = gender == "male"
 
-    if updating_existing_user(context.user_data):
-        existing_date = context.user_data["existing_user_data"]["DateOfBirth"]
+    if updating_existing_user(user_data):
+        existing_date = user_data["existing_user_data"]["DateOfBirth"]
     else:
         existing_date = None
 
@@ -189,6 +199,7 @@ async def on_gender(update, context):
 
 
 async def on_date_of_birth(update, context):
+    user_data = context.user_data[USER_DATA]
     date_of_birth_str = update.message.text
 
     if date_of_birth_str == new_user_misc.new_value_query:
@@ -199,20 +210,20 @@ async def on_date_of_birth(update, context):
         date_of_birth_str, settings={'DATE_ORDER': 'DMY'}
     )
     if datetime_dob is None:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await new_user_misc.date_of_birth_question(update)
         return NewUserStages.DATE_OF_BIRTH
 
     dob_date = datetime_dob.date()
-    context.user_data["date_of_birth"] = dob_date
+    user_data["date_of_birth"] = dob_date
 
     await update.message.reply_text(
         f"Your date of birth is {dob_date.strftime("%d-%B-%Y")}",
         reply_markup=ReplyKeyboardRemove()
     )
 
-    if updating_existing_user(context.user_data):
-        existing_tz = context.user_data["existing_user_data"]["TimeZone"]
+    if updating_existing_user(user_data):
+        existing_tz = user_data["existing_user_data"]["TimeZone"]
     else:
         existing_tz = None
 
@@ -221,6 +232,7 @@ async def on_date_of_birth(update, context):
 
 
 async def on_timezone(update, context):
+    user_data = context.user_data[USER_DATA]
     user_location = update.message.location
 
     timezone_str = None
@@ -242,9 +254,9 @@ async def on_timezone(update, context):
         timezone_obj = None
 
     if timezone_obj is not None:
-        context.user_data["time_zone"] = timezone_str
+        user_data["time_zone"] = timezone_str
     else:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         return NewUserStages.TIMEZONE
 
     await update.message.reply_text(
@@ -252,9 +264,9 @@ async def on_timezone(update, context):
         reply_markup=ReplyKeyboardRemove()
     )
 
-    if updating_existing_user(context.user_data):
+    if updating_existing_user(user_data):
         old_height = (
-            str(context.user_data["existing_user_data"]["Height"]) + " cm"
+            str(user_data["existing_user_data"]["Height"]) + " cm"
         )
     else:
         old_height = None
@@ -264,6 +276,7 @@ async def on_timezone(update, context):
 
 
 async def on_height(update, context):
+    user_data = context.user_data[USER_DATA]
     height_str = update.message.text
 
     if height_str == new_user_misc.new_value_query:
@@ -273,15 +286,15 @@ async def on_height(update, context):
     height_cm = get_height_cm(height_str)
 
     if height_cm is None:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await new_user_misc.height_question(update)
         return NewUserStages.HEIGHT
 
-    context.user_data["height"] = height_cm
+    user_data["height"] = height_cm
 
-    if updating_existing_user(context.user_data):
+    if updating_existing_user(user_data):
         old_weight = (
-            str(context.user_data["existing_user_data"]["Weight"]) + " kg"
+            str(user_data["existing_user_data"]["Weight"]) + " kg"
         )
     else:
         old_weight = None
@@ -325,6 +338,7 @@ def get_height_cm(height_str):
 
 
 async def on_weight(update, context):
+    user_data = context.user_data[USER_DATA]
     weight_str = update.message.text
 
     if weight_str == new_user_misc.new_value_query:
@@ -334,11 +348,11 @@ async def on_weight(update, context):
     weight_kg = get_weight_kg(weight_str)
 
     if weight_kg is None:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await new_user_misc.weight_question(update)
         return NewUserStages.WEIGHT
 
-    context.user_data["weight"] = weight_kg
+    user_data["weight"] = weight_kg
 
     await new_user_misc.goal_question(update)
     return NewUserStages.GOAL
@@ -364,16 +378,17 @@ def get_weight_kg(weight_str):
 
 
 async def on_goal(update, context):
+    user_data = context.user_data[USER_DATA]
     goal = update.message.text
     if goal not in new_user_misc.goals:
-        await new_user_misc.wrong_value_message(update)
+        await dialog_utils.wrong_value_message(update)
         await new_user_misc.goal_question(update)
-    context.user_data["goal"] = goal
+    user_data["goal"] = goal
     return await process_new_user_data(update, context)
 
 
 async def process_new_user_data(update, context):
-    user_data = context.user_data
+    user_data = context.user_data[USER_DATA]
 
     name = user_data["name"]
     gender = "male" if user_data["is_male"] else "female"
@@ -399,7 +414,7 @@ async def process_new_user_data(update, context):
 
     try:
         with common_mysql.get_connection() as connection:
-            if updating_existing_user(context.user_data):
+            if updating_existing_user(user_data):
                 update_mysql.update_user(
                     connection=connection,
                     tg_id=tg_id,
@@ -436,11 +451,12 @@ async def process_new_user_data(update, context):
 
 
 async def on_cancel(update, context):
-    if updating_existing_user(context.user_data):
-        command_type = "Update "
+    user_data = context.user_data[USER_DATA]
+    if updating_existing_user(user_data):
+        command_type = "Update"
         again_command = f"/{Commands.UPDATE_USER}"
     else:
-        command_type = "Registration "
+        command_type = "Registration"
         again_command = f"/{Commands.NEW_USER}"
 
     await update.message.reply_text(
@@ -456,4 +472,7 @@ async def quiet_cancel(update, context):
 
 
 def updating_existing_user(user_data):
-    return user_data["mode"] == UpdateUserMode.UPDATE
+    mode = user_data.get("mode", None)
+    if mode is None:
+        print("Warning: mode missing in ", user_data)
+    return mode == UpdateUserMode.UPDATE

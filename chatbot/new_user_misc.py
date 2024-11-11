@@ -58,13 +58,6 @@ async def date_of_birth_question(update, old_date=None):
     )
 
 
-async def wrong_value_message(update):
-    await update.message.reply_text(
-        "Wrong value",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-
 async def name_question(update, old_names=None):
     await ask_question(
         update, "Please enter your name", old_names
