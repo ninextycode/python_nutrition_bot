@@ -40,27 +40,27 @@ USER_DATA = ""
 def get_new_user_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
-        CommandHandler(Commands.NEW_USER, on_new_user),
-        CommandHandler(Commands.UPDATE_USER, on_update_user),
+        CommandHandler(Commands.NEW_USER, handle_new_user),
+        CommandHandler(Commands.UPDATE_USER, handle_update_user),
     ]
     states = {
-        NewUserStages.CONFIRM_NAME: [MessageHandler(text_only_filter, on_confirm_name)],
-        NewUserStages.NAME: [MessageHandler(text_only_filter, on_name)],
-        NewUserStages.GENDER: [MessageHandler(text_only_filter, on_gender)],
-        NewUserStages.DATE_OF_BIRTH: [MessageHandler(text_only_filter, on_date_of_birth)],
-        NewUserStages.TIMEZONE: [MessageHandler(filters.LOCATION, on_timezone),
-                                 MessageHandler(text_only_filter, on_timezone)],
-        NewUserStages.HEIGHT: [MessageHandler(text_only_filter, on_height)],
-        NewUserStages.WEIGHT: [MessageHandler(text_only_filter, on_weight)],
-        NewUserStages.GOAL: [MessageHandler(text_only_filter, on_goal)]
+        NewUserStages.CONFIRM_NAME: [MessageHandler(text_only_filter, handle_confirm_name)],
+        NewUserStages.NAME: [MessageHandler(text_only_filter, handle_name)],
+        NewUserStages.GENDER: [MessageHandler(text_only_filter, handle_gender)],
+        NewUserStages.DATE_OF_BIRTH: [MessageHandler(text_only_filter, handle_date_of_birth)],
+        NewUserStages.TIMEZONE: [MessageHandler(filters.LOCATION, handle_timezone),
+                                 MessageHandler(text_only_filter, handle_timezone)],
+        NewUserStages.HEIGHT: [MessageHandler(text_only_filter, handle_height)],
+        NewUserStages.WEIGHT: [MessageHandler(text_only_filter, handle_weight)],
+        NewUserStages.GOAL: [MessageHandler(text_only_filter, handle_goal)]
     }
     # allows to restart dialog from the middle
     for k in states.keys():
         states[k].extend(entry_points)
 
     fallbacks = [
-        CommandHandler("cancel", on_cancel),
-        MessageHandler(filters.COMMAND, on_cancel)
+        CommandHandler("cancel", handle_cancel),
+        MessageHandler(filters.COMMAND, handle_cancel)
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
@@ -70,7 +70,7 @@ def get_new_user_conversation_handler():
     return handler
 
 
-async def on_update_user(update, context):
+async def handle_update_user(update, context):
     context.user_data[USER_DATA] = dict()
     user_data = context.user_data[USER_DATA]
     user_data["mode"] = UpdateUserMode.UPDATE
@@ -103,7 +103,7 @@ async def on_update_user(update, context):
     return NewUserStages.CONFIRM_NAME
 
 
-async def on_new_user(update, context):
+async def handle_new_user(update, context):
     context.user_data[USER_DATA] = dict()
     user_data = context.user_data[USER_DATA]
     user_data["mode"] = UpdateUserMode.NEW
@@ -137,7 +137,7 @@ async def on_new_user(update, context):
     return NewUserStages.CONFIRM_NAME
 
 
-async def on_confirm_name(update, context):
+async def handle_confirm_name(update, context):
     user_data = context.user_data[USER_DATA]
     confirm = update.message.text
     if confirm not in ("yes", "no"):
@@ -164,7 +164,7 @@ async def on_confirm_name(update, context):
     return NewUserStages.NAME
 
 
-async def on_name(update, context):
+async def handle_name(update, context):
     name = update.message.text
 
     if name == new_user_misc.new_value_query:
@@ -179,7 +179,7 @@ async def on_name(update, context):
     return NewUserStages.GENDER
 
 
-async def on_gender(update, context):
+async def handle_gender(update, context):
     user_data = context.user_data[USER_DATA]
     gender = update.message.text
     if gender not in ("male", "female"):
@@ -198,7 +198,7 @@ async def on_gender(update, context):
     return NewUserStages.DATE_OF_BIRTH
 
 
-async def on_date_of_birth(update, context):
+async def handle_date_of_birth(update, context):
     user_data = context.user_data[USER_DATA]
     date_of_birth_str = update.message.text
 
@@ -231,7 +231,7 @@ async def on_date_of_birth(update, context):
     return NewUserStages.TIMEZONE
 
 
-async def on_timezone(update, context):
+async def handle_timezone(update, context):
     user_data = context.user_data[USER_DATA]
     user_location = update.message.location
 
@@ -275,7 +275,7 @@ async def on_timezone(update, context):
     return NewUserStages.HEIGHT
 
 
-async def on_height(update, context):
+async def handle_height(update, context):
     user_data = context.user_data[USER_DATA]
     height_str = update.message.text
 
@@ -337,7 +337,7 @@ def get_height_cm(height_str):
         return None
 
 
-async def on_weight(update, context):
+async def handle_weight(update, context):
     user_data = context.user_data[USER_DATA]
     weight_str = update.message.text
 
@@ -377,7 +377,7 @@ def get_weight_kg(weight_str):
         return None
 
 
-async def on_goal(update, context):
+async def handle_goal(update, context):
     user_data = context.user_data[USER_DATA]
     goal = update.message.text
     if goal not in new_user_misc.goals:
@@ -450,7 +450,7 @@ async def process_new_user_data(update, context):
     return ConversationHandler.END
 
 
-async def on_cancel(update, context):
+async def handle_cancel(update, context):
     user_data = context.user_data[USER_DATA]
     if updating_existing_user(user_data):
         command_type = "Update"

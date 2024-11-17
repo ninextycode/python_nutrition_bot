@@ -1,1 +1,4 @@
 import openai
+
+
+key = open("")
