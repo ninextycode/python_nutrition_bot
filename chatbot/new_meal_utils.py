@@ -4,7 +4,9 @@ from enum import Enum, auto
 import re
 import telegram.error
 import logging
-
+import io
+from ai_interface.openai_meal_chat import ImageData
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +21,15 @@ class InputMode(Enum):
     BARCODE = "Scan barcode"
 
 
+class HandleAiErrorOption(Enum):
+    START_AGAIN = "Try again"
+    CANCEL = "Cancel"
+
+
 class ConfirmAiOption(Enum):
     CONFIRM = "Confirm"
-    EXTRA_MESSAGE = "Send extra info for AI"
+    START_AGAIN = "Try again"
+    EXTRA_MESSAGE = "Provide more details"
     REENTER_MANUALLY = "Re-enter manually"
     CANCEL = "Cancel"
 
@@ -59,10 +67,10 @@ class UserDataEntry(Enum):
     MEAL_NAME = auto()
     MEAL_DESCRIPTION = auto()
     IS_USING_AI = auto()
-    IMAGE_FILE = auto()
+    IMAGE_DATA_FOR_AI = auto()
     DESCRIPTION_FOR_AI = auto()
     NUTRITION_DATA = auto()
-    AI_DIALOG_HISTORY = auto()
+    LAST_AI_RESPONSE = auto()
 
 
 def ai_manual_markup():
@@ -125,10 +133,10 @@ async def ai_input_question(update):
     )
 
 
-async def ask_for_picture(update, data_dict=None):
+async def ask_for_image(update, data_dict=None):
     message = await update.effective_message.reply_text(
         "Add an image",
-        reply_markup=skip_button_markup(UserDataEntry.IMAGE_FILE.value)
+        reply_markup=skip_button_markup(UserDataEntry.IMAGE_DATA_FOR_AI.value)
     )
     if data_dict:
         data_dict[LAST_SKIP_BUTTON_ID] = (message.chat.id, message.id)
@@ -333,3 +341,12 @@ def nutrition_data_2_lines(meal_data):
 def float_val_to_string(val):
     val_string = f"{int(val) if val.is_integer() else val}"
     return val_string
+
+
+async def telegram_photo_obj_to_image_data(photo_obj):
+    image_info = await photo_obj.get_file()
+    extension = Path(image_info.file_path).suffix
+    with io.BytesIO() as bytes_io:
+        await image_info.download_to_memory(bytes_io)
+        image_bytes = bytes_io.read(0)
+    return ImageData(image_data=image_bytes, extension=extension)

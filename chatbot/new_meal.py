@@ -6,14 +6,17 @@ from enum import Enum, auto
 from chatbot import dialog_utils
 from chatbot import new_meal_utils
 from chatbot.new_meal_utils import (
-    MEAL_DATA, UserDataEntry,
+    MEAL_DATA, UserDataEntry, NutritionType,
     InputMode, ConfirmAiOption, ConfirmManualOption, KeepUpdateOption
 )
-from database import update_mysql, common_mysql, select_mysql
-from pathlib import Path
+from database import common_mysql, select_mysql
+from ai_interface.openai_meal_chat import (
+    AiResponse, ImageData
+)
+from ai_interface import openai_meal_chat
+import logging
 
-
-import tempfile
+logger = logging.getLogger(__name__)
 
 
 class NewMealStages(Enum):
@@ -145,16 +148,14 @@ async def handle_choose_input_mode(update, context):
 
 
 async def handle_describe_for_ai(update, context):
-    print("update.callback_query", update.callback_query)
     meal_data = context.user_data[MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_data)
 
     description = update.message.text
-    print("on_describe_for_ai", description)
     description = description.strip()
     meal_data[UserDataEntry.DESCRIPTION_FOR_AI] = description
-    if UserDataEntry.IMAGE_FILE not in meal_data:
-        await new_meal_utils.ask_for_picture(update, meal_data)
+    if UserDataEntry.IMAGE_DATA_FOR_AI not in meal_data:
+        await new_meal_utils.ask_for_image(update, meal_data)
         return NewMealStages.ADD_IMAGE_FOR_AI
     else:
         await process_ai_request(update, context)
@@ -162,54 +163,28 @@ async def handle_describe_for_ai(update, context):
 
 
 async def handle_image_for_ai(update, context):
-    print("update.callback_query", update.callback_query)
     meal_data = context.user_data[MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_data)
 
     caption = update.message.caption
-
     images_different_res = update.message.photo
-
-    print("on_image_for_ai", caption, len(images_different_res))
 
     if len(images_different_res) == 0:
         await dialog_utils.no_markup_message(update, "Failed to get an image.")
-        await new_meal_utils.ask_for_picture(update, meal_data)
+        await new_meal_utils.ask_for_image(update, meal_data)
         return NewMealStages.ADD_IMAGE_FOR_AI
 
-    for i, im_obj in enumerate(images_different_res):
-        print(
-            "image", i,
-            "has size", im_obj.height, "x", im_obj.width,
-            "and size", im_obj.file_size, "bytes"
-        )
-
     image_highest_res = images_different_res[-1]
-
-    image_info = await image_highest_res.get_file()
-
-    directory = Path("./images")
-    directory.mkdir(parents=True, exist_ok=True)
-
-    print("file_path", image_info.file_path)
-    extension = Path(image_info.file_path).suffix
-    temp_f = tempfile.TemporaryFile()
-    await image_info.download_to_memory(temp_f)
-    temp_f.seek(0)
-
-    count = sum([obj.is_file() for obj in directory.iterdir()])
-
-    local_file_path = directory / f"./image_{count}{extension}"
-    print("writing to", local_file_path)
-    open(local_file_path, "wb").write(temp_f.read())
-
-    meal_data[UserDataEntry.IMAGE_FILE] = str(local_file_path)
+    image_data = new_meal_utils.telegram_photo_obj_to_image_data(
+        image_highest_res
+    )
+    print(image_data)
+    meal_data[UserDataEntry.IMAGE_DATA_FOR_AI] = image_data
 
     # use caption as description if description data was not specified
     # or was explicitly skipped (is None check)
     if caption is not None and (
-            UserDataEntry.DESCRIPTION_FOR_AI not in meal_data or
-            meal_data[UserDataEntry.DESCRIPTION_FOR_AI] is None
+        meal_data.get(UserDataEntry.DESCRIPTION_FOR_AI, None) is None
     ):
         meal_data[UserDataEntry.DESCRIPTION_FOR_AI] = caption
 
@@ -226,15 +201,12 @@ async def skip_description_button_callback(update, context):
     await update.callback_query.edit_message_reply_markup(None)
 
     meal_data = context.user_data[MEAL_DATA]
-    print("update.callback_query", update.callback_query)
-    print("update.callback_query.inline_message_id", update.callback_query.inline_message_id)
-
     enum_obj = UserDataEntry(update.callback_query.data)
     meal_data[enum_obj] = None
 
     if enum_obj == UserDataEntry.DESCRIPTION_FOR_AI:
         await dialog_utils.no_markup_message(update, "Text description skipped")
-    elif enum_obj == UserDataEntry.IMAGE_FILE:
+    elif enum_obj == UserDataEntry.IMAGE_DATA_FOR_AI:
         await dialog_utils.no_markup_message(update, "Image skipped")
     else:
         await dialog_utils.no_markup_message(update, "Unexpected data key skipped: " + repr(enum_obj))
@@ -242,8 +214,8 @@ async def skip_description_button_callback(update, context):
     if UserDataEntry.DESCRIPTION_FOR_AI not in meal_data:
         await new_meal_utils.ask_for_description(update, meal_data)
         return NewMealStages.ADD_DESCRIPTION_FOR_AI
-    elif UserDataEntry.IMAGE_FILE not in meal_data:
-        await new_meal_utils.ask_for_picture(update, meal_data)
+    elif UserDataEntry.IMAGE_DATA_FOR_AI not in meal_data:
+        await new_meal_utils.ask_for_image(update, meal_data)
         return NewMealStages.ADD_IMAGE_FOR_AI
     else:
         await process_ai_request(update, context)
@@ -251,15 +223,35 @@ async def skip_description_button_callback(update, context):
 
 
 async def process_ai_request(update, context):
-    await dialog_utils.no_markup_message(update, "got data for ai")
+    await dialog_utils.no_markup_message(update, "Making AI request")
     meal_data = context.user_data[MEAL_DATA]
     description = meal_data.get(UserDataEntry.DESCRIPTION_FOR_AI, None)
-    image = meal_data.get(UserDataEntry.IMAGE_FILE, None)
-    await dialog_utils.no_markup_message(update, "Description: " + str(description))
-    await dialog_utils.no_markup_message(update, "Image: " + str(image))
+    image_data = meal_data.get(UserDataEntry.IMAGE_DATA_FOR_AI, None)
+    print(image_data)
+    try:
+        ai_response = openai_meal_chat.get_meal_estimate(
+            description, image_data
+        )
+    except Exception as e:
+        logger.error(f"get_meal_estimate error {e}")
+        raise e
 
-    print("description", description)
-    print("image", image)
+    ai_meal_data = ai_response.meal_data
+    if not ai_meal_data.success_flag:
+        await dialog_utils.no_markup_message(
+            update, ai_meal_data.error_message
+        )
+
+    nutrition_data = {
+        NutritionType.CALORIES: ai_meal_data.energy,
+        NutritionType.CARB: ai_meal_data.carbohydrates,
+        NutritionType.FATS: ai_meal_data.fats,
+        NutritionType.PROTEINS: ai_meal_data.proteins,
+    }
+    meal_data[UserDataEntry.MEAL_NAME] = ai_meal_data.name
+    meal_data[UserDataEntry.MEAL_DESCRIPTION] = ai_meal_data.description
+    meal_data[UserDataEntry.NUTRITION_DATA] = nutrition_data
+    meal_data[UserDataEntry.LAST_AI_RESPONSE] = ai_response
 
 
 async def handle_confirm_ai_estimate(update, context):
