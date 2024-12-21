@@ -1,5 +1,41 @@
 from telegram import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 import datetime
+from enum import Enum, auto
+from chatbot import dialog_utils
+from chatbot.config import u_reg, Commands
+import logging
+import pint
+import re
+
+logger = logging.getLogger(__name__)
+USER_DATA = "USER_DATA"
+
+
+class UpdateUserMode(Enum):
+    NEW = auto()
+    UPDATE = auto()
+
+
+class UserDataEntry(Enum):
+    @staticmethod
+    def _generate_next_value_(name, start, count, last_values):
+        return name
+
+    MODE = auto()
+    NAME = auto()
+    DATE_OF_BIRTH = auto()
+    TIME_ZONE = auto()
+    IS_MALE = auto()
+    GOAL = auto()
+    IS_ACTIVE = auto()
+    HEIGHT = auto()
+    WEIGHT = auto()
+    OLD_USER_DATA = auto()
+
+
+class MaleFemale(Enum):
+    MALE = "Male"
+    FEMALE = "Female"
 
 
 new_value_query = "Enter new value"
@@ -39,14 +75,7 @@ def old_value_or_enter_new_markup(old_values=None):
     )
 
 
-def yes_no_markup():
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("yes"), KeyboardButton("no")]],
-        resize_keyboard=True
-    )
-
-
-async def date_of_birth_question(update, old_date=None):
+async def ask_date_of_birth_question(update, old_date=None):
     if old_date is not None and isinstance(old_date, datetime.date):
         old_date = old_date.strftime("%d/%m/%Y")
     question = (
@@ -58,13 +87,27 @@ async def date_of_birth_question(update, old_date=None):
     )
 
 
-async def name_question(update, old_names=None):
+async def ask_for_password(update):
+    await update.message.reply_text(
+        "Enter registration password", reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def ask_to_confirm_existing_name(update, user_data):
+    await update.message.reply_text(
+        f"Hi {user_data[UserDataEntry.NAME]}! Let's set up a new user. \n" +
+        "Is this your correct name?",
+        reply_markup=dialog_utils.yes_no_markup(),
+    )
+
+
+async def ask_for_name(update, old_names=None):
     await ask_question(
         update, "Please enter your name", old_names
     )
 
 
-async def gender_question(update):
+async def ask_gender_question(update):
     await update.message.reply_text(
         "Please select your gender",
         reply_markup=male_female_markup()
@@ -73,24 +116,24 @@ async def gender_question(update):
 
 def male_female_markup():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("male"), KeyboardButton("female")]],
+        [[KeyboardButton(v.value) for v in MaleFemale]],
         resize_keyboard=True
     )
 
 
-async def height_question(update, old_height=None):
+async def ask_height_question(update, old_height=None):
     await ask_question(
         update, "What is your height?", old_height
     )
 
 
-async def weight_question(update, old_weight=None):
+async def ask_weight_question(update, old_weight=None):
     await ask_question(
         update, "What is your weight? (kg unit assumed)", old_weight
     )
 
 
-async def goal_question(update):
+async def ask_goal_question(update):
     await update.message.reply_text(
         "What is your goal?",
         reply_markup=goal_markup()
@@ -107,7 +150,7 @@ def goal_markup():
     )
 
 
-async def timezone_question(update, old_timezone=None):
+async def ask_timezone_question(update, old_timezone=None):
     await update.message.reply_text(
         "Let's determine your timezone",
         reply_markup=location_markup(old_timezone)
@@ -132,3 +175,79 @@ def location_markup(existing_values=None):
         keyboard_layout,
         resize_keyboard=True
     )
+
+
+async def send_message_on_cancel(update, user_data):
+    if updating_existing_user(user_data):
+        command_type = "Update"
+        again_command = f"/{Commands.UPDATE_USER}"
+    else:
+        command_type = "Registration"
+        again_command = f"/{Commands.NEW_USER}"
+
+    await update.message.reply_text(
+        f"{command_type} cancelled. " +
+        f"Use {again_command} command to start again!",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+def updating_existing_user(user_data):
+    mode = user_data.get(UserDataEntry.MODE, None)
+    if mode is None:
+        logger.warning("Warning: mode missing in %s", user_data)
+
+    return mode == UpdateUserMode.UPDATE
+
+
+def get_weight_kg(weight_str):
+    weight_str = weight_str.lower()
+    try:
+        weight_with_unit = u_reg(weight_str)
+        # assume units to be kilograms
+        if not isinstance(weight_with_unit, pint.Quantity):
+            weight_with_unit = weight_with_unit * u_reg("kg")
+    except pint.PintError:
+        return None
+
+    weight_kg = weight_with_unit.to("kg").magnitude
+    good_weight = 25 < weight_kg < 650
+
+    if good_weight:
+        return weight_kg
+    else:
+        return None
+
+
+def get_height_cm(height_str):
+    height_str = height_str.lower()
+
+    feet_match = re.search(r"(\d+)'(\d+)?\"?", height_str)
+    if feet_match:
+        feet = feet_match.group(1)
+        inches = feet_match.group(2) if feet_match.group(2) else "0"
+        height_str = f"{feet} feet + {inches} inches "
+
+    try:
+        height_with_unit = u_reg(height_str)
+    except pint.PintError:
+        return None
+
+    # deduce unit from the magnitude
+    if not isinstance(height_with_unit, pint.Quantity):
+        if height_with_unit < 3:
+            height_with_unit = height_with_unit * u_reg("m")
+        elif height_with_unit < 9:
+            height_with_unit = height_with_unit * u_reg("ft")
+        elif 90 < height_with_unit < 300:
+            height_with_unit = height_with_unit * u_reg("cm")
+        else:
+            return None
+
+    height_cm = height_with_unit.to("cm").magnitude
+    good_height = 90 < height_cm < 300
+
+    if good_height:
+        return height_cm
+    else:
+        return None

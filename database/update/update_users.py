@@ -1,6 +1,6 @@
 from database.init_mysql import execute_query
-from database.select_mysql import select_first_row_query, get_gender_id, get_goal_id
-import logging
+from database.select.select_common import select_first_row_query
+from database.select.select_users import get_gender_id, get_goal_id
 
 
 def create_new_user(
@@ -21,19 +21,23 @@ def create_new_user(
 
     gender_id = get_gender_id(connection, gender)
     goal_id = get_goal_id(connection, goal)
+    if goal_id is None:
+        raise KeyError(f"Goal \"{goal}\" was not found in goals database.")
 
+    # set IsActive to True, no not implement any registration/activation functionality for now
     new_user_query = (
         "INSERT INTO users "
-        "(Name, TelegramID, TimezoneID, GenderID, GoalID, Weight, Height, DateOfBirth) "
+        "(Name, TelegramID, TimezoneID, GenderID, GoalID, Weight, Height, DateOfBirth, IsActive) "
         "VALUES ( "
-        f"%(name)s, "
-        f"%(tg_id)s, "
-        f"%(timezone_id)s, "
-        f"%(gender_id)s, "
-        f"%(goal_id)s, "
-        f"%(weight)s, "
-        f"%(height)s, "
-        f"%(date_of_birth)s"
+        "%(name)s, "
+        "%(tg_id)s, "
+        "%(timezone_id)s, "
+        "%(gender_id)s, "
+        "%(goal_id)s, "
+        "%(weight)s, "
+        "%(height)s, "
+        "%(date_of_birth)s, "
+        "TRUE"
         ");"
     )
 
@@ -47,8 +51,9 @@ def create_new_user(
         height=round(height),
         date_of_birth=date_of_birth
     )
-    execute_query(connection, new_user_query, parameters)
+    result = execute_query(connection, new_user_query, parameters)
     connection.commit()
+    return result
 
 
 def update_user(
@@ -117,8 +122,9 @@ def update_user(
         f"SET {values} "
         "WHERE TelegramID = %(tg_id)s ;"
     )
-    execute_query(connection, update_user_query, parameters)
+    result = execute_query(connection, update_user_query, parameters)
     connection.commit()
+    return result
 
 
 def get_timezone_id_insert_if_missing(connection, time_zone):
@@ -132,7 +138,7 @@ def get_timezone_id_insert_if_missing(connection, time_zone):
             "INSERT INTO timezones (TimeZone)"
             "VALUES (%s);"
         )
-        execute_query(connection, add_query, [time_zone])
+        add_query_result = execute_query(connection, add_query, [time_zone])
         timezone_id = select_first_row_query(
             connection, "SELECT LAST_INSERT_ID() AS ID;"
         )
@@ -143,18 +149,20 @@ def get_timezone_id_insert_if_missing(connection, time_zone):
 def activate_user(connection, user_id):
     query = (
         "UPDATE users "
-        f"SET IsActive=TRUE "
-        f"WHERE ID=%s"
+        "SET IsActive=TRUE "
+        "WHERE ID=%s"
     )
-    execute_query(connection, query, [user_id])
+    result = execute_query(connection, query, [user_id])
     connection.commit()
+    return result
 
 
 def deactivate_user(connection, user_id):
     query = (
         "UPDATE users "
-        f"SET IsActive=FALSE "
-        f"WHERE ID=%s"
+        "SET IsActive=FALSE "
+        "WHERE ID=%s"
     )
-    execute_query(connection, query, [user_id])
+    result = execute_query(connection, query, [user_id])
     connection.commit()
+    return result

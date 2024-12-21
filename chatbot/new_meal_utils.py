@@ -7,6 +7,8 @@ import logging
 import io
 from ai_interface.openai_meal_chat import ImageData
 from pathlib import Path
+from chatbot import dialog_utils
+from ai_interface import openai_meal_chat
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +19,9 @@ MEAL_DATA = "MEAL_DATA"
 
 class InputMode(Enum):
     AI = "Use AI"
-    MANUAL = "Enter Manually"
-    BARCODE = "Scan barcode"
+    MANUAL = "Text"
+    BARCODE = "Barcode"
+    HISTORY = "Saved meals"
 
 
 class HandleAiErrorOption(Enum):
@@ -29,15 +32,25 @@ class HandleAiErrorOption(Enum):
 class ConfirmAiOption(Enum):
     CONFIRM = "Confirm"
     START_AGAIN = "Try again"
-    EXTRA_MESSAGE = "Provide more details"
+    MORE_INFO = "Provide more details"
     REENTER_MANUALLY = "Re-enter manually"
     CANCEL = "Cancel"
 
 
 class ConfirmManualOption(Enum):
     CONFIRM = "Confirm"
-    REENTER_MANUALLY = "Re-enter"
+    REENTER = "Re-enter"
     CANCEL = "Cancel"
+
+
+class OneMultipleIngredients(Enum):
+    ONE = "One entry"
+    MULTIPLE = "Multiple ingredients"
+
+
+class MoreIngredientsOrFinish(Enum):
+    MORE = "Add more"
+    FINISH = "Finish"
 
 
 class NutritionType(Enum):
@@ -58,7 +71,7 @@ class KeepUpdateOption(Enum):
     KEEP = "Keep existing"
 
 
-class UserDataEntry(Enum):
+class MealDataEntry(Enum):
     @staticmethod
     def _generate_next_value_(name, start, count, last_values):
         return name
@@ -70,7 +83,8 @@ class UserDataEntry(Enum):
     IMAGE_DATA_FOR_AI = auto()
     DESCRIPTION_FOR_AI = auto()
     NUTRITION_DATA = auto()
-    LAST_AI_RESPONSE = auto()
+    INGREDIENT_NUTRITION_DATA = auto()
+    LAST_AI_MESSAGE_LIST = auto()
 
 
 def ai_manual_markup():
@@ -136,7 +150,7 @@ async def ai_input_question(update):
 async def ask_for_image(update, data_dict=None):
     message = await update.effective_message.reply_text(
         "Add an image",
-        reply_markup=skip_button_markup(UserDataEntry.IMAGE_DATA_FOR_AI.value)
+        reply_markup=skip_button_markup(MealDataEntry.IMAGE_DATA_FOR_AI.value)
     )
     if data_dict:
         data_dict[LAST_SKIP_BUTTON_ID] = (message.chat.id, message.id)
@@ -145,13 +159,17 @@ async def ask_for_image(update, data_dict=None):
 async def ask_for_description(update, data_dict=None):
     message = await update.effective_message.reply_text(
         "Type your description",
-        reply_markup=skip_button_markup(UserDataEntry.DESCRIPTION_FOR_AI.value)
+        reply_markup=skip_button_markup(MealDataEntry.DESCRIPTION_FOR_AI.value)
     )
     if data_dict:
         data_dict[LAST_SKIP_BUTTON_ID] = (message.chat.id, message.id)
 
 
 async def remove_last_skip_button(context, user_data):
+    # AI data request messages have an inline keyboard with one button
+    # that gives an option to skip
+    # This button should be removed when it is no longer meaningful
+    # (when data was provided, input was cancelled, etc)
     if LAST_SKIP_BUTTON_ID not in user_data:
         return
 
@@ -182,9 +200,9 @@ async def ask_for_meal_description(update):
 
 
 async def ask_to_confirm_existing_description(update, meal_data):
-    name = meal_data[UserDataEntry.MEAL_NAME]
+    name = meal_data[MealDataEntry.MEAL_NAME]
     description = meal_data.get(
-        UserDataEntry.MEAL_DESCRIPTION, ""
+        MealDataEntry.MEAL_DESCRIPTION, ""
     )
     message = (
         f"Name: \"{name}\"\n"
@@ -207,7 +225,7 @@ def keep_update_markup():
 async def ask_to_confirm_existing_nutrition(update, meal_data):
     message = (
         f"Nutrition data:\n" +
-        nutrition_data_4_lines(meal_data) + "\n" +
+        nutrition_data_four_lines(meal_data) + "\n" +
         "Enter new values?"
     )
     await update.message.reply_text(
@@ -215,15 +233,72 @@ async def ask_to_confirm_existing_nutrition(update, meal_data):
     )
 
 
-async def ask_for_nutrition_values(update):
+async def ask_one_or_many_ingredients_to_enter(update):
+    message = "Specify as a single entry or as multiple ingredients?"
+    await update.message.reply_text(
+        message, reply_markup=one_multiple_markup()
+    )
 
-    message = (
-        "Specify nutrition manually.\n" +
+
+def one_multiple_markup():
+    keys = [o.value for o in OneMultipleIngredients]
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(v) for v in keys]], resize_keyboard=True
+    )
+
+
+async def ask_more_ingredients_or_finish(update):
+    message = "Add more or finish?"
+    await update.message.reply_text(
+        message, reply_markup=add_finish_markup()
+    )
+
+
+def add_finish_markup():
+    keys = [o.value for o in MoreIngredientsOrFinish]
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(v) for v in keys]], resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+
+async def ask_for_single_entry_nutrition(update, format_only=False):
+    request_line = "Specify nutrition in a text message."
+    format_message = (
         "Use the following format:\n" +
         one_line_nutrition_format()
     )
+    if format_only:
+        message = format_message
+    else:
+        message = request_line + "\n" + format_message
     await update.message.reply_text(
         message,
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def ask_for_multiple_ingredients_nutrition(update, format_only=False):
+    request_line = "Specify nutrition for each of the ingredients."
+    format_message = (
+        "Use the following format:\n" +
+        "Name (optional)\n" +
+        one_line_nutrition_format()
+    )
+    if format_only:
+        message = format_message
+    else:
+        message = request_line + "\n" + format_message
+    await update.message.reply_text(
+        message, reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def ask_for_next_ingredient(update, meal_data):
+    n_ingredients = len(meal_data.get(MealDataEntry.INGREDIENT_NUTRITION_DATA, []))
+    new_ingredient_ord = n_ingredients + 1
+    await update.message.reply_text(
+        f"Ingredient {new_ingredient_ord}:",
         reply_markup=ReplyKeyboardRemove()
     )
 
@@ -246,9 +321,10 @@ def one_line_nutrition_format():
     return " / ".join(nutrition_format_parts)
 
 
-async def ask_to_confirm_ai_estimate(update):
+async def ask_to_confirm_ai_estimate(update, meal_data):
     message = (
-        meal_data_to_string(update.user_data[MEAL_DATA]) + "\n" +
+        "AI nutrition value estimate: \n" +
+        meal_data_to_string(meal_data) + "\n" +
         "Confirm data?"
     )
     await update.message.reply_text(
@@ -273,6 +349,55 @@ async def ask_to_confirm_manual_entry_data(update, meal_data, long_nutrition=Fal
     )
 
 
+async def describe_ingredients(update, meal_data, include_total=False):
+    named_ingredients = meal_data.get(MealDataEntry.INGREDIENT_NUTRITION_DATA, [])
+    message_lines = ["Ingredients: " + one_line_nutrition_format()]
+    for pos, (name, nut) in enumerate(named_ingredients, start=1):
+        line = f"{pos}) "
+        if name is not None:
+            line += name + " : "
+        line += nutrition_dict_to_str(nut)
+        message_lines.append(line)
+
+    if include_total:
+        message_lines.append("")
+        total_nut_value = add_ingredients_nutrition([
+            nut for (name, nut) in named_ingredients
+        ])
+        total_line = "Total: " + nutrition_dict_to_str(total_nut_value)
+        message_lines.append(total_line)
+
+    message = "\n".join(message_lines)
+    await update.message.reply_text(
+        message, reply_markup=ReplyKeyboardRemove()
+    )
+
+
+def combine_ingredients(meal_data):
+    named_ingredients = meal_data.pop(MealDataEntry.INGREDIENT_NUTRITION_DATA, [])
+    names = [name for (name, nut) in named_ingredients if name is not None]
+    nutrition_added = add_ingredients_nutrition(
+        [nut for (name, nut) in named_ingredients]
+    )
+
+    meal_data[MealDataEntry.NUTRITION_DATA] = nutrition_added
+
+    if len(names) > 0:
+        description = meal_data.get(MealDataEntry.MEAL_DESCRIPTION, "")
+        if len(description) > 0:
+            description = description + "\n"
+        description = description + "Ingredients: " + ", ".join(names)
+        meal_data[MealDataEntry.MEAL_DESCRIPTION] = description
+
+
+def add_ingredients_nutrition(ingredients):
+    nutrition_full = {}
+    for nut_vals in ingredients:
+        for k, v in nut_vals.items():
+            nutrition_full[k] = nutrition_full.get(k, 0) + v
+    return nutrition_full
+
+
 def confirm_data_markup():
     keys = [o.value for o in ConfirmManualOption]
     return ReplyKeyboardMarkup(
@@ -282,26 +407,26 @@ def confirm_data_markup():
 
 def meal_data_to_string(meal_data, long_nutrition=False):
     if long_nutrition:
-        nutrition_lines = nutrition_data_4_lines(meal_data, " - ")
+        nutrition_lines = nutrition_data_four_lines(meal_data, " - ")
     else:
-        nutrition_lines = nutrition_data_2_lines(meal_data)
+        nutrition_lines = nutrition_data_two_lines(meal_data)
 
     s = (
-        f"Name: {meal_data[UserDataEntry.MEAL_NAME]}\n" +
-        f"Description: {meal_data[UserDataEntry.MEAL_DESCRIPTION]}\n" +
+        f"Name: {meal_data[MealDataEntry.MEAL_NAME]}\n" +
+        f"Description: {meal_data[MealDataEntry.MEAL_DESCRIPTION]}\n" +
         nutrition_lines
     )
     return s
 
 
-def nutrition_data_4_lines(meal_data, prefix=""):
-    nutrition_data = meal_data[UserDataEntry.NUTRITION_DATA]
+def nutrition_data_four_lines(meal_data, prefix=""):
+    nutrition_data = meal_data[MealDataEntry.NUTRITION_DATA]
     nutrition_strings = []
     for n in NutritionType:
         nutrition_val = nutrition_data[n]
         nutrition_val_string = float_val_to_string(nutrition_val)
         nutrition_string = (
-            prefix + n.value + ": " + nutrition_val_string + " " + n.unit()
+            prefix + n.value + ": " + nutrition_val_string + n.unit()
         )
         nutrition_strings.append(nutrition_string)
 
@@ -322,20 +447,26 @@ def nutrition_data_4_lines(meal_data, prefix=""):
     final_lines = []
     for nutrition_s, percentage_s in zip(nutrition_strings, percentage_strings):
         if len(percentage_s) > 0:
-            final_lines.append(nutrition_s + " - " + percentage_s)
+            final_lines.append(nutrition_s + f" ({percentage_s})")
         else:
             final_lines.append(nutrition_s)
 
     return "\n".join(final_lines)
 
 
-def nutrition_data_2_lines(meal_data):
-    nutrition_data = meal_data[UserDataEntry.NUTRITION_DATA]
+def nutrition_data_two_lines(meal_data):
+    nutrition_data = meal_data[MealDataEntry.NUTRITION_DATA]
     nutrition_format = one_line_nutrition_format()
-    nutrition_string = " / ".join([
-        float_val_to_string(nutrition_data[n]) for n in NutritionType
-    ])
+    nutrition_string = nutrition_dict_to_str(nutrition_data)
     return nutrition_format + "\n" + nutrition_string
+
+
+def nutrition_dict_to_str(nutrition_dict):
+    nutrition_string = " / ".join([
+        float_val_to_string(nutrition_dict.get(n, 0)) + n.unit()
+        for n in NutritionType
+    ])
+    return nutrition_string
 
 
 def float_val_to_string(val):
@@ -350,3 +481,40 @@ async def telegram_photo_obj_to_image_data(photo_obj):
         await image_info.download_to_memory(bytes_io)
         image_bytes = bytes_io.read(0)
     return ImageData(image_data=image_bytes, extension=extension)
+
+
+async def ask_for_mode_information(update):
+    await update.message.reply_text(
+        "Type an extra message with additional information about the meal.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def handle_new_ai_response(ai_response, update, meal_data):
+    ai_meal_data = ai_response.meal_data
+    if not ai_meal_data.success_flag:
+        await dialog_utils.no_markup_message(
+            update, f"OpenAI error message: \n{ai_meal_data.error_message}"
+        )
+        return False
+
+    nutrition_data = {
+        NutritionType.CALORIES: ai_meal_data.energy,
+        NutritionType.CARB: ai_meal_data.carbohydrates,
+        NutritionType.FATS: ai_meal_data.fats,
+        NutritionType.PROTEINS: ai_meal_data.proteins,
+    }
+    meal_data[MealDataEntry.MEAL_NAME] = ai_meal_data.name
+    meal_data[MealDataEntry.MEAL_DESCRIPTION] = ai_meal_data.description
+    meal_data[MealDataEntry.NUTRITION_DATA] = nutrition_data
+    meal_data[MealDataEntry.LAST_AI_MESSAGE_LIST] = openai_meal_chat.remove_non_text_messages(
+        ai_response.message_list
+    )
+    return True
+
+
+async def ask_to_save_meal_for_future_use(update):
+    message = "Save meal for future use?"
+    await update.message.reply_text(
+        message, reply_markup=dialog_utils.yes_no_markup()
+    )

@@ -1,6 +1,6 @@
 from database import config
 from database.common_mysql import execute_query, use_database
-from database.select_mysql import does_table_exist
+from database.select.select_common import get_number_of_rows
 
 
 def create_database(connection):
@@ -19,7 +19,7 @@ def create_user_table(connection):
         "TimeZoneID INT UNSIGNED NOT NULL DEFAULT 0, "
         "GenderID INT UNSIGNED NOT NULL, "
         "GoalID INT UNSIGNED NOT NULL, "
-        "Weight DECIMAL(5, 1) NOT NULL CHECK (Weight >= 0), "
+        "Weight DECIMAL(7, 1) NOT NULL CHECK (Weight >= 0), "
         "Height INT UNSIGNED NOT NULL, "
         "DateOfBirth DATE NOT NULL,"
         "FOREIGN KEY (TimeZoneID) REFERENCES timezones(ID), "
@@ -30,16 +30,23 @@ def create_user_table(connection):
     return execute_query(connection, query)
 
 
-def create_meals_table(connection):
+def create_meals_eaten_table(connection):
     query = (
-        "CREATE TABLE IF NOT EXISTS meals( "
+        "CREATE TABLE IF NOT EXISTS meals_eaten( "
         "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
         "UserID INT UNSIGNED NOT NULL, "
-        "Calories INT UNSIGNED NOT NULL, "
-        "Carbohydrate INT UNSIGNED NOT NULL, "
-        "Protein INT UNSIGNED NOT NULL, "
-        "Fat INT UNSIGNED NOT NULL, "
-        "IsUpperLimit BOOL NOT NULL, "
+        
+        "CreatedUTCDateTime DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP), "
+        "CreatedLocalDateTime DATETIME NOT NULL, "
+        
+        "Name VARCHAR(100) NOT NULL, "
+        "Description VARCHAR(5000), "
+        
+        "Weight DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "Calories DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "Carbs DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "Protein DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "Fat DECIMAL(10, 4) UNSIGNED NOT NULL, "
         
         "FOREIGN KEY (UserID) REFERENCES users(ID) "
         ")"
@@ -53,9 +60,9 @@ def create_users_targets_table(connection):
         "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
         "UserID INT UNSIGNED UNIQUE NOT NULL, "
         "Calories INT UNSIGNED NOT NULL, "
-        "Carbohydrate INT UNSIGNED NOT NULL, "
         "Protein INT UNSIGNED NOT NULL, "
         "Fat INT UNSIGNED NOT NULL, "
+        "Carbs INT UNSIGNED NOT NULL, "
         "MealUTCDateTime DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP), "
 
         "FOREIGN KEY (UserID) REFERENCES users(ID)"
@@ -65,9 +72,6 @@ def create_users_targets_table(connection):
 
 
 def create_genders_table(connection):
-    if does_table_exist(connection, "genders"):
-        return
-
     query_init = (
         "CREATE TABLE IF NOT EXISTS genders( "
         "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
@@ -75,18 +79,16 @@ def create_genders_table(connection):
         ")"
     )
     execute_query(connection, query_init)
-
-    query_insert = (
-        "INSERT INTO genders (Gender) VALUES "
-        """( "male" ), ( "female" );"""
-    )
-    execute_query(connection, query_insert)
+    # add rows, but only to the newly created database
+    if get_number_of_rows(connection, "genders") == 0:
+        query_insert = (
+            "INSERT INTO genders (Gender) VALUES "
+            """( "male" ), ( "female" );"""
+        )
+        execute_query(connection, query_insert)
 
 
 def create_timezones_table(connection):
-    if does_table_exist(connection, "timezones"):
-        return
-
     query_init = (
         "CREATE TABLE IF NOT EXISTS timezones( "
         "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
@@ -94,17 +96,16 @@ def create_timezones_table(connection):
         ")"
     )
     execute_query(connection, query_init)
-    query_insert = (
-        "INSERT INTO timezones (ID, TimeZone) VALUES "
-        """( 0, "utc" );"""
-    )
-    execute_query(connection, query_insert)
+    # add rows, but only to the newly created database
+    if get_number_of_rows(connection, "timezones") == 0:
+        query_insert = (
+            "INSERT INTO timezones (ID, TimeZone) VALUES "
+            """( 0, "utc" );"""
+        )
+        execute_query(connection, query_insert)
 
 
 def create_goals_table(connection):
-    if does_table_exist(connection, "goals"):
-        return
-
     query_init = (
         "CREATE TABLE IF NOT EXISTS goals( "
         "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
@@ -112,15 +113,41 @@ def create_goals_table(connection):
         ")"
     )
     execute_query(connection, query_init)
-    query_insert = (
-        "INSERT INTO goals (Goal) VALUES "
-        """( "lose weight" ), """
-        """( "lose weight slowly" ), """
-        """( "maintain weight" ), """
-        """( "gain muscle slowly" ), """
-        """( "gain muscle" );"""
+    # add rows, but only to the newly created database
+    if get_number_of_rows(connection, "goals") == 0:
+        query_insert = (
+            "INSERT INTO goals (Goal) VALUES "
+            """( "lose weight" ), """
+            """( "lose weight slowly" ), """
+            """( "maintain weight" ), """
+            """( "gain muscle slowly" ), """
+            """( "gain muscle" );"""
+        )
+        execute_query(connection, query_insert)
+
+
+def create_meals_for_future_use_table(connection):
+    query = (
+        "CREATE TABLE IF NOT EXISTS meals_for_future_use( "
+        "ID INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, "
+        "UserID INT UNSIGNED NOT NULL, "
+        
+        "CreatedUTCDateTime DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP), "
+        
+        "Name VARCHAR(100) NOT NULL, "
+        "Description VARCHAR(5000), "
+        
+        "DefaultWeightGrams DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "CaloriesPer100g DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "ProteinPer100g DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "FatPer100g DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        "CarbsPer100g DECIMAL(10, 4) UNSIGNED NOT NULL, "
+        
+        "FOREIGN KEY (UserID) REFERENCES users(ID), "
+        "UNIQUE (UserID, Name) "
+        ")"
     )
-    execute_query(connection, query_insert)
+    return execute_query(connection, query)
 
 
 def create_schema(connection):
@@ -132,7 +159,8 @@ def create_schema(connection):
     create_timezones_table(connection)
 
     create_user_table(connection)
-    create_meals_table(connection)
+    create_meals_eaten_table(connection)
     create_users_targets_table(connection)
+    create_meals_for_future_use_table(connection)
 
     connection.commit()

@@ -31,3 +31,9 @@ def open_database_connection():
 def get_connection():
     # TODO use pool
     return open_database_connection()
+
+
+def validate_table_name(table_name):
+    if not table_name.isidentifier():
+        raise ValueError(f"Invalid table name: {table_name}")
+    return table_name

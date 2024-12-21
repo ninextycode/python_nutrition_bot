@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 client = OpenAI(api_key=config.key)
 
 
-model = "gpt-4o-mini"
+model = "gpt-4o"
 logger.info(f"Using model {model}")
 
 system_prompt = (
@@ -37,8 +37,10 @@ system_prompt = (
     "other errors. "
     "\n"
     "The user may send additional messages with clarifications or corrections. "
-    "Use it to update each estimate value if there is a reason to update it, "
-    "or keep the old ones."
+    "In this case, the original image that you have received will be dropped. "
+    "But the original output that you have responded with will be present. "
+    "Use the information from the user's response to your first message. "
+    "Update each estimate value, when there is a reason to update it. "
 )
 
 
@@ -103,7 +105,6 @@ class AiResponse(BaseModel):
 def get_initial_messages(description=None, image_data=None):
     system_message = {
         "role": "system",
-        # "content": [get_text_content(system_prompt)]
         "content": system_prompt
     }
 
@@ -139,20 +140,19 @@ def get_update_request_message(request):
 def get_meal_estimate(description=None, image_data=None):
     if description is None and image_data is None:
         raise TypeError("Both description and image data are missing")
-
     messages = get_initial_messages(description, image_data)
     return get_ai_response(messages)
 
 
-def update_meal_estimate(ai_response, update_request):
-    messages = list(ai_response.message_list)
+def update_meal_estimate(previous_ai_response: AiResponse, update_request):
+    messages = remove_non_text_messages(previous_ai_response.message_list)
     update_request_message = get_update_request_message(update_request)
     messages.append(update_request_message)
     return get_ai_response(messages)
 
 
 def get_ai_response(messages):
-    text_messages = remove_non_text_messages(messages)
+    messages = list(messages)
     try:
         completion = get_message_completion(messages)
     except OpenAIError as e:
@@ -164,9 +164,8 @@ def get_ai_response(messages):
     else:
         meal_data = parse_completion(completion)
         assistant_message = get_assistant_message(completion)
-        text_messages.append(assistant_message)
-
-    return AiResponse(meal_data, text_messages)
+        messages.append(assistant_message)
+    return AiResponse(meal_data=meal_data, message_list=messages)
 
 
 def parse_completion(completion):

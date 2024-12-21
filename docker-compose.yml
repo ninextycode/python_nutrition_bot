@@ -5,6 +5,7 @@ services:
     volumes:
       - mysql_volume:/var/lib/mysql
       - ./secrets/mysql:/secrets/mysql
+      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
     environment:
       MYSQL_ROOT_PASSWORD_FILE: "/secrets/mysql/root_password.txt"
       MYSQL_DATABASE_FILE: "/secrets/mysql/database.txt"

@@ -2,7 +2,7 @@ import pint
 
 
 secret = open("secrets/telegram_secret.txt").read()
-
+registration_password = open("secrets/registration_password.txt").read()
 
 class Commands:
     NEW_USER = "new_user"

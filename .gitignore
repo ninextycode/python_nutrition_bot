@@ -1,7 +1,10 @@
 secrets
 env
 data
-activate
 .idea
 __pycache__
-test.py
+images
+docker-entrypoint-initdb.d/*dump.sql
+tests
+/*test.py
+/activate

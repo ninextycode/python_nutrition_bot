@@ -1,4 +1,5 @@
-from database import select_mysql, common_mysql
+from database import common_mysql
+from database.select import select_common
 from telegram import ReplyKeyboardRemove
 from chatbot.config import Commands
 
