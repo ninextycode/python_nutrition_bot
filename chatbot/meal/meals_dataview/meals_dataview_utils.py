@@ -11,6 +11,7 @@ from typing import override
 import telegram.error
 import logging
 from telegram import ReplyKeyboardRemove
+import traceback
 
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,7 @@ def get_meals_inline_keyboard_markup(meals: list[MealEaten]):
             "◀", callback_data=DateNavigationOption.PREVIOUS.as_payload_str()
         ),
         InlineKeyboardButton(
-            "Enter\nDate", callback_data=DateNavigationOption.ENTER_DATE.as_payload_str()
+            "Date", callback_data=DateNavigationOption.ENTER_DATE.as_payload_str()
         ),
         InlineKeyboardButton(
             "▶", callback_data=DateNavigationOption.NEXT.as_payload_str()
@@ -175,6 +176,8 @@ async def delete_dataview_message(context):
     dialog_data = context.user_data[MEALS_EATEN_DB]
     if MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID not in dialog_data:
         logger.warning("dataview message data does not exist, message cannot be deleted")
+        stack_trace = ''.join(traceback.format_stack())
+        logger.warning("stack_trace:\n" + stack_trace)
         return
     chat_id, message_id = dialog_data.pop(MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID)
     await context.bot.delete_message(chat_id=chat_id, message_id=message_id)

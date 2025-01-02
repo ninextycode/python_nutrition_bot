@@ -594,7 +594,7 @@ async def handle_cancel(update, context):
     meal_dialog_data = context.user_data[MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
     message = "New meal entry cancelled"
-    await update.message.reply_text(
-        message, reply_markup=ReplyKeyboardRemove(),
+    await dialog_utils.keep_markup_message(
+        update, message
     )
     return ConversationHandler.END

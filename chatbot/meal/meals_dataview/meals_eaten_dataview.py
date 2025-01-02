@@ -56,6 +56,9 @@ def get_meals_eaten_view_conversation_handler():
 
 
 async def open_meals_eaten_view(update, context):
+    if MEALS_EATEN_DB in context.user_data:
+        await meals_dataview_utils.delete_dataview_message(context)
+
     context.user_data[MEALS_EATEN_DB] = dict()
     dialog_data = context.user_data[MEALS_EATEN_DB]
 
@@ -206,8 +209,6 @@ async def handle_exception_back_to_day_view(update, context, e):
 
 
 async def handle_cancel(update, context):
-    # cannot delete last message
-    # the existing custom input keyboard (from another dialog) button will be destroyed to
-    # await meals_dataview_utils.delete_dataview_message(context)
-    await dialog_utils.no_markup_message(update, "Meals view dialog ended")
+    await meals_dataview_utils.delete_dataview_message(context)
+    await dialog_utils.keep_markup_message(update, "Meals view dialog ended")
     return ConversationHandler.END
