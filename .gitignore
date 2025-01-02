@@ -5,6 +5,7 @@ data
 __pycache__
 images
 docker-entrypoint-initdb.d/*dump.sql
+docker-entrypoint-initdb.d/*test.sql
 tests
 /*test.py
 /activate

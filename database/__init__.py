@@ -1,3 +1,5 @@
-from database.common_mysql import *
-from database.select.select_common import *
-from database.update.update_users import *
+from database.common_sql import init_sqlalchemy_engine
+init_sqlalchemy_engine()
+
+import database.food_database_model
+

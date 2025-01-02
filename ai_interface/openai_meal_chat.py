@@ -21,8 +21,8 @@ system_prompt = (
     "Give the meal a short name. "
     "Give one sentence for a simple, concise meal description. "
     "Make a reasonable estimation for the nutrition value of this meal. "
-    "Use grams for the proteins, fats, carbohydrates. "
-    "Use kcal for the energy value. "
+    "Use grams for the protein, fat, carbohydrate values. "
+    "Use kcal for the calories energy value. "
     "Use grams for the total weight. "
     "Set the success flag to true. "
     "\n"
@@ -47,10 +47,10 @@ system_prompt = (
 class MealDataOutputFormat(BaseModel):
     name: str
     description: str
-    proteins: float
-    fats: float
-    carbohydrates: float
-    energy: float
+    protein: float
+    fat: float
+    carbohydrate: float
+    calories: float
     total_weight: float
     success_flag: bool
     error_message: str
@@ -59,15 +59,15 @@ class MealDataOutputFormat(BaseModel):
     @staticmethod
     def default(
         name="", description="",
-        proteins=0, fats=0, carbohydrates=0,
-        energy=0, total_weight=0,
+        protein=0, fat=0, carbohydrate=0,
+        calorie=0, total_weight=0,
         success_flag=False,
         error_message=""
     ):
         return MealDataOutputFormat(
             name=name, description=description,
-            proteins=proteins, fats=fats, carbohydrates=carbohydrates,
-            energy=energy, total_weight=total_weight,
+            protein=protein, fat=fat, carbohydrate=carbohydrate,
+            calorie=calorie, total_weight=total_weight,
             success_flag=success_flag,
             error_message=error_message
         )
@@ -78,6 +78,9 @@ class ImageData(BaseModel):
     extension: str
 
     def __init__(self, image_data, extension):
+        if extension.startswith("."):
+            extension = extension.lstrip(".")
+
         if isinstance(image_data, bytes):
             image_b64_string = ImageData.encode_to_b64(image_data)
         elif Path(image_data).is_file():
@@ -144,8 +147,8 @@ def get_meal_estimate(description=None, image_data=None):
     return get_ai_response(messages)
 
 
-def update_meal_estimate(previous_ai_response: AiResponse, update_request):
-    messages = remove_non_text_messages(previous_ai_response.message_list)
+def update_meal_estimate(previous_message_list, update_request):
+    messages = remove_non_text_messages(previous_message_list)
     update_request_message = get_update_request_message(update_request)
     messages.append(update_request_message)
     return get_ai_response(messages)
@@ -216,7 +219,7 @@ def get_text_content(text):
 
 
 def get_message_completion(messages):
-    print("get_message_completion, messages", messages)
+    logger.info("get_message_completion, messages", remove_non_text_messages(messages))
     completion = client.beta.chat.completions.parse(
         response_format=MealDataOutputFormat,
         model=model,

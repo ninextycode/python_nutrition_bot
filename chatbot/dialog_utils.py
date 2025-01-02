@@ -2,11 +2,13 @@ from telegram import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 from chatbot.config import Commands
 from telegram.ext import ConversationHandler
 from enum import Enum
+import telegram.error
 
 
-async def no_markup_message(update, message):
+async def no_markup_message(update, message, **kwargs):
     await update.effective_message.reply_text(
-        message, reply_markup=ReplyKeyboardRemove()
+        message, reply_markup=ReplyKeyboardRemove(),
+        **kwargs
     )
 
 
@@ -35,3 +37,14 @@ def yes_no_markup():
         [[KeyboardButton(v.value) for v in YesNo]],
         resize_keyboard=True
     )
+
+
+def pass_exception_if_message_not_modified(e):
+    # telegram raises exception if no change is needed, can be ignored
+    if (
+        isinstance(e, telegram.error.BadRequest) and
+        e.message.startswith("Message is not modified")
+    ):
+        pass
+    else:
+        raise

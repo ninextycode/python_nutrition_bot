@@ -1,4 +1,5 @@
 from telegram import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+from database.food_database_model import User
 import datetime
 from enum import Enum, auto
 from chatbot import dialog_utils
@@ -17,35 +18,24 @@ class UpdateUserMode(Enum):
 
 
 class UserDataEntry(Enum):
-    @staticmethod
-    def _generate_next_value_(name, start, count, last_values):
-        return name
-
-    MODE = auto()
-    NAME = auto()
-    DATE_OF_BIRTH = auto()
-    TIME_ZONE = auto()
-    IS_MALE = auto()
-    GOAL = auto()
-    IS_ACTIVE = auto()
-    HEIGHT = auto()
-    WEIGHT = auto()
-    OLD_USER_DATA = auto()
+    NEW_USER_OBJECT = auto()
+    OLD_USER_OBJECT = auto()
 
 
-class MaleFemale(Enum):
+class MaleFemaleOption(Enum):
     MALE = "Male"
     FEMALE = "Female"
 
 
+class GoalOption(Enum):
+    LOSE_WEIGHT = "lose weight"
+    LOSE_WEIGHT_SLOWLY = "lose weight slowly"
+    MAINTAIN_WEIGHT = "maintain weight"
+    GAIN_MUSCLE_SLOWLY = "gain muscle slowly"
+    GAIN_MUSCLE = "gain muscle"
+
+
 new_value_query = "Enter new value"
-goals = [
-    "lose weight",
-    "lose weight slowly",
-    "maintain weight",
-    "gain muscle slowly",
-    "gain muscle",
-]
 
 
 async def ask_question(update, question, old_answers=None):
@@ -93,9 +83,9 @@ async def ask_for_password(update):
     )
 
 
-async def ask_to_confirm_existing_name(update, user_data):
+async def ask_to_confirm_existing_name(update, existing_name):
     await update.message.reply_text(
-        f"Hi {user_data[UserDataEntry.NAME]}! Let's set up a new user. \n" +
+        f"Hi {existing_name}! Let's set up a new user. \n" +
         "Is this your correct name?",
         reply_markup=dialog_utils.yes_no_markup(),
     )
@@ -116,7 +106,7 @@ async def ask_gender_question(update):
 
 def male_female_markup():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton(v.value) for v in MaleFemale]],
+        [[KeyboardButton(v.value) for v in MaleFemaleOption]],
         resize_keyboard=True
     )
 
@@ -143,8 +133,8 @@ async def ask_goal_question(update):
 def goal_markup():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(g)]
-            for g in goals
+            [KeyboardButton(g.value)]
+            for g in GoalOption
         ],
         resize_keyboard=True
     )
@@ -152,7 +142,11 @@ def goal_markup():
 
 async def ask_timezone_question(update, old_timezone=None):
     await update.message.reply_text(
-        "Let's determine your timezone",
+        (
+            "Let's determine your timezone.\n"
+            "If you cannot send location, type and send your timezone name.\n"
+            "Example: \"Europe/London\""
+        ),
         reply_markup=location_markup(old_timezone)
     )
 
@@ -178,26 +172,18 @@ def location_markup(existing_values=None):
 
 
 async def send_message_on_cancel(update, user_data):
-    if updating_existing_user(user_data):
-        command_type = "Update"
-        again_command = f"/{Commands.UPDATE_USER}"
-    else:
+    if user_data.get(UserDataEntry.OLD_USER_OBJECT, None) is None:
         command_type = "Registration"
         again_command = f"/{Commands.NEW_USER}"
+    else:
+        command_type = "Update"
+        again_command = f"/{Commands.UPDATE_USER}"
 
     await update.message.reply_text(
         f"{command_type} cancelled. " +
         f"Use {again_command} command to start again!",
         reply_markup=ReplyKeyboardRemove()
     )
-
-
-def updating_existing_user(user_data):
-    mode = user_data.get(UserDataEntry.MODE, None)
-    if mode is None:
-        logger.warning("Warning: mode missing in %s", user_data)
-
-    return mode == UpdateUserMode.UPDATE
 
 
 def get_weight_kg(weight_str):

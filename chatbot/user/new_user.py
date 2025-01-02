@@ -6,13 +6,14 @@ import dateparser
 import timezonefinder
 from chatbot.config import Commands, registration_password
 from dateutil import tz
-from database import common_mysql
+from database import common_sql
 from database.update import update_users
 from database.select import select_users
-from chatbot import new_user_utils
-from chatbot.new_user_utils import (
-    UserDataEntry, MaleFemale, USER_DATA, UpdateUserMode, updating_existing_user
+from chatbot.user import user_utils
+from chatbot.user.user_utils import (
+    UserDataEntry, MaleFemaleOption, USER_DATA, GoalOption
 )
+from database.food_database_model import User, TimeZone, GoalEntry, MaleFemaleEntry
 from chatbot import dialog_utils
 import logging
 
@@ -70,17 +71,15 @@ def get_new_user_conversation_handler():
 async def handle_update_user(update, context):
     context.user_data[USER_DATA] = dict()
     user_data = context.user_data[USER_DATA]
-    user_data[UserDataEntry.MODE] = UpdateUserMode.UPDATE
 
     tg_id = update.message.from_user.id
 
-    with common_mysql.get_connection() as connection:
-        # TODO need to convert to use the same keys as UserDataEntry
-        old_user_data = select_users.select_user_by_telegram_id(
-            connection, tg_id
+    with common_sql.get_session() as session:
+        old_user = select_users.select_user_by_telegram_id(
+            session, tg_id
         )
 
-    if old_user_data is None:
+    if old_user is None:
         response = "User does not exists. "
         response += f"Use /{Commands.NEW_USER} instead"
         await update.message.reply_text(
@@ -88,30 +87,29 @@ async def handle_update_user(update, context):
         )
         return ConversationHandler.END
 
-    dob = old_user_data[UserDataEntry.DATE_OF_BIRTH]
-    old_user_data[UserDataEntry.DATE_OF_BIRTH] = dob.strftime('%d/%m/%Y')
-    user_data[UserDataEntry.OLD_USER_DATA] = old_user_data
+    user_data[UserDataEntry.OLD_USER_OBJECT] = old_user
+    user_data[UserDataEntry.NEW_USER_OBJECT] = User(
+        telegram_id=update.message.from_user.id
+    )
 
-    user_data[UserDataEntry.NAME] = old_user_data[UserDataEntry.NAME]
-    await new_user_utils.ask_to_confirm_existing_name(update, user_data)
+    await user_utils.ask_to_confirm_existing_name(update, old_user.name)
     return NewUserStages.CONFIRM_NAME
 
 
 async def handle_new_user(update, context):
     context.user_data[USER_DATA] = dict()
     user_data = context.user_data[USER_DATA]
-    user_data[UserDataEntry.MODE] = UpdateUserMode.NEW
 
     tg_id = update.message.from_user.id
 
-    with common_mysql.get_connection() as connection:
-        old_user_data = select_users.select_user_by_telegram_id(
-            connection, tg_id
+    with common_sql.get_session() as session:
+        old_user = select_users.select_user_by_telegram_id(
+            session, tg_id
         )
 
-    if old_user_data is not None:
+    if old_user is not None:
         response = "User exists. "
-        if old_user_data[UserDataEntry.IS_ACTIVE]:
+        if old_user.is_activated:
             response += "User activated"
         else:
             response += "User awaits activation"
@@ -121,25 +119,32 @@ async def handle_new_user(update, context):
         )
         return ConversationHandler.END
 
-    await new_user_utils.ask_for_password(update)
+    user_data[UserDataEntry.NEW_USER_OBJECT] = User(
+        telegram_id=update.message.from_user.id
+    )
+
+    await user_utils.ask_for_password(update)
     return NewUserStages.CHECK_REGISTRATION_PASSWORD
 
 
 async def check_reg_password(update, context):
-    user_data = context.user_data[USER_DATA]
+    new_user: User = context.user_data[USER_DATA][UserDataEntry.NEW_USER_OBJECT]
     user_password = update.message.text
     if user_password == registration_password:
-        user_data[UserDataEntry.NAME] = update.effective_user.first_name
-        await new_user_utils.ask_to_confirm_existing_name(update, user_data)
+        new_user.name = update.effective_user.first_name
+        await user_utils.ask_to_confirm_existing_name(update, new_user.name)
         return NewUserStages.CONFIRM_NAME
     else:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_for_password(update)
+        await user_utils.ask_for_password(update)
         return NewUserStages.CHECK_REGISTRATION_PASSWORD
 
 
 async def handle_confirm_name(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
+
     confirm = update.message.text
     if confirm not in dialog_utils.YesNo:
         await dialog_utils.wrong_value_message(update)
@@ -151,60 +156,70 @@ async def handle_confirm_name(update, context):
     confirmed = (confirm == dialog_utils.YesNo.YES.value)
 
     if confirmed:
-        await new_user_utils.ask_gender_question(update)
+        await user_utils.ask_gender_question(update)
         return NewUserStages.GENDER
 
-    if updating_existing_user(user_data):
+    if old_user is not None:
         tg_name = update.effective_user.first_name
-        existing_name = user_data[UserDataEntry.OLD_USER_DATA][UserDataEntry.NAME]
-        old_names = [tg_name, existing_name]
+        existing_name = old_user.name
+        old_names = {tg_name, existing_name}
     else:
         old_names = []
 
-    await new_user_utils.ask_for_name(update, old_names)
+    await user_utils.ask_for_name(update, old_names)
     return NewUserStages.NAME
 
 
 async def handle_name(update, context):
+    user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     name = update.message.text
 
-    if name == new_user_utils.new_value_query:
-        await new_user_utils.ask_for_name(update)
+    if name == user_utils.new_value_query:
+        await user_utils.ask_for_name(update)
         return NewUserStages.NAME
 
     if len(name) == 0:
         await dialog_utils.wrong_value_message(update)
         return NewUserStages.NAME
 
-    await new_user_utils.ask_gender_question(update)
+    new_user.name = name
+
+    await user_utils.ask_gender_question(update)
     return NewUserStages.GENDER
 
 
 async def handle_gender(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
+
     gender = update.message.text
-    if gender not in new_user_utils.MaleFemale:
+    if gender not in MaleFemaleOption:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_gender_question(update)
+        await user_utils.ask_gender_question(update)
         return NewUserStages.GENDER
 
-    user_data[UserDataEntry.IS_MALE] = (gender == new_user_utils.MaleFemale.MALE.value)
+    new_user.gender_obj = MaleFemaleEntry[MaleFemaleOption(gender).name].value
 
-    if updating_existing_user(user_data):
-        existing_date = user_data[UserDataEntry.OLD_USER_DATA][UserDataEntry.DATE_OF_BIRTH]
+    if old_user is not None:
+        existing_dob = old_user.date_of_birth
     else:
-        existing_date = None
+        existing_dob = None
 
-    await new_user_utils.ask_date_of_birth_question(update, existing_date)
+    await user_utils.ask_date_of_birth_question(update, existing_dob)
     return NewUserStages.DATE_OF_BIRTH
 
 
 async def handle_date_of_birth(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
+
     date_of_birth_str = update.message.text
 
-    if date_of_birth_str == new_user_utils.new_value_query:
-        await new_user_utils.ask_date_of_birth_question(update)
+    if date_of_birth_str == user_utils.new_value_query:
+        await user_utils.ask_date_of_birth_question(update)
         return NewUserStages.DATE_OF_BIRTH
 
     datetime_dob = dateparser.parse(
@@ -212,27 +227,29 @@ async def handle_date_of_birth(update, context):
     )
     if datetime_dob is None:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_date_of_birth_question(update)
+        await user_utils.ask_date_of_birth_question(update)
         return NewUserStages.DATE_OF_BIRTH
 
     dob_date = datetime_dob.date()
-    user_data[UserDataEntry.DATE_OF_BIRTH] = dob_date
+    new_user.date_of_birth = dob_date
 
     await dialog_utils.no_markup_message(
         update, f"Your date of birth is {dob_date.strftime("%d-%B-%Y")}"
     )
 
-    if updating_existing_user(user_data):
-        existing_tz = user_data[UserDataEntry.OLD_USER_DATA][UserDataEntry.TIME_ZONE]
+    if old_user is not None:
+        existing_tz = old_user.timezone_obj.timezone
     else:
         existing_tz = None
 
-    await new_user_utils.ask_timezone_question(update, existing_tz)
+    await user_utils.ask_timezone_question(update, existing_tz)
     return NewUserStages.TIMEZONE
 
 
 async def handle_timezone(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
     user_location = update.message.location
 
     timezone_str = None
@@ -254,7 +271,7 @@ async def handle_timezone(update, context):
         timezone_obj = None
 
     if timezone_obj is not None:
-        user_data[UserDataEntry.TIME_ZONE] = timezone_str
+        new_user.timezone_obj = TimeZone.get_if_exists_or_create_new(timezone=timezone_str)
     else:
         await dialog_utils.wrong_value_message(update)
         return NewUserStages.TIMEZONE
@@ -263,141 +280,116 @@ async def handle_timezone(update, context):
         update, f"Your timezone is {timezone_str}"
     )
 
-    if updating_existing_user(user_data):
-        old_height = (
-            str(user_data[UserDataEntry.OLD_USER_DATA][UserDataEntry.HEIGHT]) + " cm"
-        )
+    if old_user is not None:
+        old_height = str(old_user.height) + " cm"
     else:
         old_height = None
 
-    await new_user_utils.ask_height_question(update, old_height)
+    await user_utils.ask_height_question(update, old_height)
     return NewUserStages.HEIGHT
 
 
 async def handle_height(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
     height_str = update.message.text
 
-    if height_str == new_user_utils.new_value_query:
-        await new_user_utils.ask_height_question(update)
+    if height_str == user_utils.new_value_query:
+        await user_utils.ask_height_question(update)
         return NewUserStages.HEIGHT
 
-    height_cm = new_user_utils.get_height_cm(height_str)
+    height_cm = user_utils.get_height_cm(height_str)
 
     if height_cm is None:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_height_question(update)
+        await user_utils.ask_height_question(update)
         return NewUserStages.HEIGHT
 
-    user_data[UserDataEntry.HEIGHT] = height_cm
+    new_user.height = height_cm
 
-    if updating_existing_user(user_data):
-        old_weight = (
-            str(user_data[UserDataEntry.OLD_USER_DATA][UserDataEntry.WEIGHT]) + " kg"
-        )
+    if old_user is not None:
+        old_weight = str(old_user.weight) + " kg"
     else:
         old_weight = None
 
-    await new_user_utils.ask_weight_question(update, old_weight)
+    await user_utils.ask_weight_question(update, old_weight)
     return NewUserStages.WEIGHT
 
 
 async def handle_weight(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     weight_str = update.message.text
 
-    if weight_str == new_user_utils.new_value_query:
-        await new_user_utils.ask_weight_question(update)
+    if weight_str == user_utils.new_value_query:
+        await user_utils.ask_weight_question(update)
         return NewUserStages.WEIGHT
 
-    weight_kg = new_user_utils.get_weight_kg(weight_str)
+    weight_kg = user_utils.get_weight_kg(weight_str)
 
     if weight_kg is None:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_weight_question(update)
+        await user_utils.ask_weight_question(update)
         return NewUserStages.WEIGHT
 
-    user_data[UserDataEntry.WEIGHT] = weight_kg
+    new_user.weight = weight_kg
 
-    await new_user_utils.ask_goal_question(update)
+    await user_utils.ask_goal_question(update)
     return NewUserStages.GOAL
 
 
 async def handle_goal(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     goal = update.message.text
-    if goal not in new_user_utils.goals:
+    if goal not in GoalOption:
         await dialog_utils.wrong_value_message(update)
-        await new_user_utils.ask_goal_question(update)
-    user_data[UserDataEntry.GOAL] = goal
+        await user_utils.ask_goal_question(update)
+
+    try:
+        new_user.goal_obj = GoalEntry[GoalOption(goal).name].value
+    except KeyError:
+        await dialog_utils.wrong_value_message(
+            update, f"Database entry for \"{goal}\" goal does not exist"
+        )
+        await user_utils.ask_goal_question(update)
+
     return await process_new_user_data(update, context)
 
 
 async def process_new_user_data(update, context):
     user_data = context.user_data[USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
-    # TODO this can only be simplified if I create a class for sql schema
-    name = user_data[UserDataEntry.NAME]
-    if user_data[UserDataEntry.IS_MALE]:
-        gender = MaleFemale.MALE
+    if old_user is None:
+        await dialog_utils.no_markup_message(update, "Creating new user")
     else:
-        gender = MaleFemale.FEMALE
-    date_of_birth = user_data[UserDataEntry.DATE_OF_BIRTH]
-    height = user_data[UserDataEntry.HEIGHT]
-    weight = user_data[UserDataEntry.WEIGHT]
-    goal = user_data[UserDataEntry.GOAL]
-    time_zone = user_data[UserDataEntry.TIME_ZONE]
-    tg_id = update.message.from_user.id
+        await dialog_utils.no_markup_message(update, "Updating user")
 
     summary = (
-        "User Data:\n"
-        f" - name: {name}\n"
-        f" - gender: {gender}\n"
-        f" - date_of_birth: {date_of_birth.strftime('%d/%m/%Y')}\n"
-        f" - height: {int(round(height))} cm\n"
-        f" - weight: {round(weight)} kg\n"
-        f" - goal: {goal}\n"
-        f" - goal: {time_zone}\n"
-        f" - unique telegram id: {tg_id}\n"
-        "wait for your account to be approved"
+        new_user.describe() + "\n"
+        "Account is approved automatically"
     )
+    await dialog_utils.no_markup_message(update, summary)
 
     try:
-        with common_mysql.get_connection() as connection:
-            if updating_existing_user(user_data):
-                update_users.update_user(
-                    connection=connection,
-                    tg_id=tg_id,
-                    name=name,
-                    gender=gender,
-                    goal=goal,
-                    weight=weight,
-                    height=height,
-                    date_of_birth=date_of_birth,
-                    time_zone=time_zone
-                )
+        with common_sql.get_session() as session:
+            if old_user is not None:
+                new_user.id = old_user.id
+                update_users.update_user(session, new_user)
             else:
-                update_users.create_new_user(
-                    connection=connection,
-                    name=name,
-                    gender=gender,
-                    goal=goal,
-                    weight=weight,
-                    height=height,
-                    date_of_birth=date_of_birth,
-                    tg_id=tg_id,
-                    time_zone=time_zone
-                )
-        message = summary
+                update_users.add_new_user(session, new_user)
+        await dialog_utils.no_markup_message(update, "New data added")
     except Exception as e:
         logging.exception(e)
-        message = "Database error"
+        await dialog_utils.no_markup_message(update, "Database error")
 
-    await dialog_utils.no_markup_message(update, message)
     return ConversationHandler.END
 
 
 async def handle_cancel(update, context):
     user_data = context.user_data[USER_DATA]
-    await new_user_utils.send_message_on_cancel(update, user_data)
+    await user_utils.send_message_on_cancel(update, user_data)
     return ConversationHandler.END

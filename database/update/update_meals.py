@@ -1,149 +1,71 @@
-from database.common_mysql import execute_query
+import sqlalchemy as sa
+from database.food_database_model import *
 import numpy as np
 
 
-def create_new_eaten_meal(
-    connection,
-    user_id,
-    meal_name,
-    description=None,
-    weight=0,
-    calories=0,
-    protein=0,
-    fat=0,
-    carbs=0,
-    overwrite_create_time=None
+def add_new_eaten_meal(
+    session, meal_eaten
 ):
-
-    new_user_query = (
-        "INSERT INTO meals_eaten "
-        f"("
-        "UserID, Name, Description, Weight, Calories, Protein, Fat, Carbs"
-        f"{", CreatedUTCDateTime" if overwrite_create_time is not None else ""}"
-        ") "
-        "VALUES ( "
-        "%(user_id)s, "
-        "%(name)s, "
-        "%(description)s, "
-        "%(weight)s, "
-        "%(calories)s, "
-        "%(protein)s, "
-        "%(fat)s, "
-        "%(carbs)s"
-        f"{", %(create_time)s" if overwrite_create_time is not None else ""}"
-        ");"
-    )
-    parameters = dict(
-        user_id=user_id,
-        name=meal_name,
-        description=description,
-        weight=weight,
-        calories=calories,
-        protein=protein,
-        fat=fat,
-        carbs=carbs
-    )
-    if overwrite_create_time is not None:
-        parameters["create_time"] = overwrite_create_time
-    result = execute_query(connection, new_user_query, parameters)
-    connection.commit()
-    return result
+    session.add(meal_eaten)
+    session.commit()
 
 
-def create_new_meal_for_future_use(
-    connection,
-    user_id,
-    meal_name,
-    description=None,
-    weight=0,
-    calories=0,
-    protein=0,
-    fat=0,
-    carbs=0
+def add_new_meal_for_future_use(
+    session, meal_for_future_use
 ):
-    if weight <= 0:
-        raise ValueError("weight myst be positive")
+    session.add(meal_for_future_use)
+    session.commit()
+
+
+def add_new_meal_for_future_use_from_meal_eaten(
+    session, meal_eaten, default_weight=None
+):
+    if default_weight is None:
+        default_weight = meal_eaten.weight
+
+    if default_weight is None or default_weight <= 0:
+        raise ValueError("weight must be positive")
+
     values = np.array([
-        calories, protein, fat, carbs
+        (v if v is not None else 0) for v in
+        [meal_eaten.calories, meal_eaten.protein, meal_eaten.fat, meal_eaten.carbs]
     ])
-    values_per_100 = values / weight
+    values_per_100 = values / meal_eaten.weight * 100
+
     calories_per_100, protein_per_100, fat_per_100, carbs_per_100 = values_per_100
-    return create_new_meal_for_future_use_per_100(
-        connection,
-        user_id,
-        meal_name,
-        description,
-        weight,
-        calories_per_100,
-        protein_per_100,
-        fat_per_100,
-        carbs_per_100
+
+    meal_for_future_use = MealForFutureUse(
+        user_id=meal_eaten.user_id,
+        name=meal_eaten.name,
+        description=meal_eaten.description,
+        default_weight_grams=default_weight,
+        calories_per_100g=calories_per_100,
+        protein_per_100g=protein_per_100,
+        fat_per_100g=fat_per_100,
+        carbs_per_100g=carbs_per_100
     )
+    session.add(meal_for_future_use)
+    session.commit()
 
 
-def create_new_meal_for_future_use_per_100(
-    connection,
-    user_id,
-    meal_name,
-    description=None,
-    default_weight=0,
-    calories_per_100=0,
-    protein_per_100=0,
-    fat_per_100=0,
-    carbs_per_100=0
+def delete_meal_eaten(
+    session, meal_value
 ):
-    # need to add (2) / (3) .. etc to names that already exist
-    new_user_query = (
-        "INSERT INTO meals_for_future_use "
-        "(UserID, Name, Description, DefaultWeightGrams, CaloriesPer100g, ProteinPer100g, FatPer100g, CarbsPer100g) "
-        "VALUES ( "
-        f"%(user_id)s, "
-        f"%(name)s, "
-        f"%(description)s, "
-        f"%(default_weight)s, "
-        f"%(calories_per_100)s, "
-        f"%(protein_per_100)s, "
-        f"%(fat_per_100)s, "
-        f"%(carbs_per_100)s"
-        ");"
-    )
-
-    parameters = dict(
-        user_id=user_id,
-        name=meal_name,
-        description=description,
-        default_weight=default_weight,
-        calories_per_100=calories_per_100,
-        fat_per_100=fat_per_100,
-        carbs_per_100=carbs_per_100,
-        protein_per_100=protein_per_100
-    )
-    result = execute_query(connection, new_user_query, parameters)
-    connection.commit()
-    return result
-
-
-def delete_eaten_meal(
-    connection,
-    meal_id
-):
-    delete_query = (
-        "DELETE FROM meals_eaten "
-        "WHERE ID=%s;"
-    )
-    result = execute_query(connection, delete_query, [meal_id])
-    connection.commit()
-    return result
+    if isinstance(meal_value, MealEaten):
+        session.delete(meal_value)
+    else:
+        sql = sa.delete(MealEaten).where(MealEaten.id == meal_value)
+        session.execute(sql)
+    session.commit()
 
 
 def delete_meal_for_future_use(
-    connection,
-    meal_id
+    session, meal_value
 ):
-    delete_query = (
-        "DELETE FROM meals_for_future_use "
-        "WHERE ID=%s;"
-    )
-    result = execute_query(connection, delete_query, [meal_id])
-    connection.commit()
-    return result
+    if isinstance(meal_value, MealForFutureUse):
+        session.delete(meal_value)
+    else:
+        sql = sa.delete(MealForFutureUse).where(MealEaten.id == meal_value)
+        session.execute(sql)
+    session.commit()
+

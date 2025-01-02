@@ -13,7 +13,10 @@ config = context.config
 
 
 # set correct url
-config.set_main_option("sqlalchemy.url", os.getenv("SQLALCHEMY_URL"))
+sqlalchemy_url = os.getenv("SQLALCHEMY_URL", None)
+if sqlalchemy_url is None:
+    raise RuntimeError("Environment variable SQLALCHEMY_URL is not set")
+config.set_main_option("sqlalchemy.url", sqlalchemy_url)
 
 
 # Interpret the config file for Python logging.
@@ -23,9 +26,9 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+from database import food_database_model
+target_metadata = food_database_model.Base.metadata
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -46,11 +49,12 @@ def run_migrations_offline() -> None:
 
     """
     url = config.get_main_option("sqlalchemy.url")
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
+        dialect_opts={"paramstyle": "named"}
     )
 
     with context.begin_transaction():
@@ -72,7 +76,11 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata,
+            # Exclude everything from the current SQL database rom being considered
+            # to create a "zero-state" migration
+            # To do this, uncomment the line below
+            # include_name=lambda name, type_, parent_names: False
         )
 
         with context.begin_transaction():
