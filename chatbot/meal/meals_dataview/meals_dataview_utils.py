@@ -7,7 +7,6 @@ from database.select import select_meals
 from chatbot import dialog_utils, config
 from telegram.constants import ParseMode
 import datetime
-from typing import override
 import telegram.error
 import logging
 from telegram import ReplyKeyboardRemove

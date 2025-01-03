@@ -21,7 +21,7 @@ async def get_existing_user_data(update, context):
         )
         return
 
-    message = user_utils.describe_user(user)
+    message = user.describe()
     await dialog_utils.no_markup_message(update, message)
     return
 
@@ -45,3 +45,4 @@ async def delete_user(update, context):
     except Exception as e:
         logging.exception(e)
         await dialog_utils.no_markup_message(update, "Database error")
+
