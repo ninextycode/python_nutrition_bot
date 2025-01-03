@@ -13,6 +13,11 @@ services:
       MYSQL_PASSWORD_FILE: "/secrets/mysql/password.txt"
     ports:
       - "3306:3306"
+    networks:
+      - mysql_network
 
 volumes:
   mysql_volume:
+
+networks:
+  mysql_network:

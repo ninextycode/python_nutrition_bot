@@ -234,7 +234,7 @@ async def handle_date_of_birth(update, context):
     new_user.date_of_birth = dob_date
 
     await dialog_utils.no_markup_message(
-        update, f"Your date of birth is {dob_date.strftime("%d-%B-%Y")}"
+        update, f"Your date of birth is {dob_date.strftime('%d-%B-%Y')}"
     )
 
     if old_user is not None:

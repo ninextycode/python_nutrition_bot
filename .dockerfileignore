@@ -1,0 +1,14 @@
+# Exclude the virtual environment folder
+venv/
+
+# Exclude the init scripts folder for MySQL (if not needed for the Python container)
+docker-entrypoint-initdb.d/
+
+# Ignore common temporary or unnecessary files
+*.pyc
+*.pyo
+__pycache__/
+.DS_Store
+
+docker-compose.yml
+run_docker.sh
