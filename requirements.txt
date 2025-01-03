@@ -25,7 +25,8 @@ jiter==0.7.0
 kiwisolver==1.4.5
 matplotlib==3.9.1
 matplotlib-inline==0.1.7
-mysql-connector-python==9.0.0
+mysql-connector-python==9.1.0
+mysqlclient==2.2.6
 numpy==2.0.1
 openai==1.54.3
 packaging==24.1
@@ -60,6 +61,5 @@ tzdata==2024.1
 tzlocal==5.2
 unit-convert==1.2.0
 wcwidth==0.2.13
-
 SQLAlchemy~=2.0.36
 alembic~=1.14.0

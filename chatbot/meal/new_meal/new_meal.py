@@ -131,7 +131,8 @@ async def handle_new_meal(update, context):
         )
 
     if existing_user is None:
-        return await dialog_utils.user_does_not_exist_message(update)
+        await dialog_utils.user_does_not_exist_message(update)
+        return ConversationHandler.END
 
     meal_dialog_data[MealDataEntry.USER_NAME] = existing_user.name
     meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT] = MealEaten(
@@ -309,11 +310,8 @@ async def handle_confirm_ai_estimate(update, context):
     elif choice == ConfirmAiOption.CANCEL.value:
         return await handle_cancel(update, context)
     else:
-        await dialog_utils.wrong_value_message(update)
-        await new_meal_utils.ask_to_confirm_ai_estimate(
-            update, meal_dialog_data, show_estimates=False
-        )
-        return NewMealStages.CONFIRM_AI_ESTIMATE
+        # assume the new message is a message with more info for ai
+        return await handle_more_info_for_ai(update, context)
 
 
 async def handle_more_info_for_ai(update, context):

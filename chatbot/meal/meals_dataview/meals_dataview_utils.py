@@ -176,8 +176,6 @@ async def delete_dataview_message(context):
     dialog_data = context.user_data[MEALS_EATEN_DB]
     if MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID not in dialog_data:
         logger.warning("dataview message data does not exist, message cannot be deleted")
-        stack_trace = ''.join(traceback.format_stack())
-        logger.warning("stack_trace:\n" + stack_trace)
         return
     chat_id, message_id = dialog_data.pop(MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID)
     await context.bot.delete_message(chat_id=chat_id, message_id=message_id)

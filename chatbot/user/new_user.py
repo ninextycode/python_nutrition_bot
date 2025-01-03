@@ -80,11 +80,7 @@ async def handle_update_user(update, context):
         )
 
     if old_user is None:
-        response = "User does not exists. "
-        response += f"Use /{Commands.NEW_USER} instead"
-        await update.message.reply_text(
-            response, reply_markup=ReplyKeyboardRemove()
-        )
+        await dialog_utils.user_does_not_exist_message(update)
         return ConversationHandler.END
 
     user_data[UserDataEntry.OLD_USER_OBJECT] = old_user

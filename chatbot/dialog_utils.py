@@ -14,9 +14,8 @@ async def no_markup_message(update, message, **kwargs):
 
 async def keep_markup_message(update, message, **kwargs):
     # when one command creates a new dialog while another dialog exists
-    # the "exit" message from the other dialog may destroy the
-    # markup of the first message of the new dialog
-    # if it is created with "no_markup_message"
+    # the "exit" message from the dialog that is about to end may destroy the markup
+    # of the first message of the new dialog if it is created with "no_markup_message"
     # "keep_markyp_message" should be used as an alternative
     await update.effective_message.reply_text(
         message, **kwargs
@@ -32,7 +31,7 @@ async def wrong_value_message(update, extra_message=None):
 
 
 async def user_does_not_exist_message(update):
-    response = "User does not exists. "
+    response = "User does not exist. "
     response += f"Use /{Commands.NEW_USER} instead"
     await no_markup_message(update, response)
     return ConversationHandler.END

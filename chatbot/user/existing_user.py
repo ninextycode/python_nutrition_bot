@@ -38,8 +38,9 @@ async def delete_user(update, context):
                 update, f"User with telegram id {tg_id} deleted"
             )
         else:
+            await dialog_utils.user_does_not_exist_message(update)
             await dialog_utils.no_markup_message(
-                update, f"User with telegram id {tg_id} does not exists"
+                update, f"Telegram id = {tg_id}"
             )
     except Exception as e:
         logging.exception(e)

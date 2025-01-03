@@ -70,11 +70,7 @@ async def open_meals_eaten_view(update, context):
         )
 
     if user is None:
-        response = "User does not exists. "
-        response += f"Use /{Commands.NEW_USER} instead"
-        await update.message.reply_text(
-            response, reply_markup=ReplyKeyboardRemove()
-        )
+        await dialog_utils.user_does_not_exist_message(update)
         return ConversationHandler.END
     else:
         dialog_data[MealsEatenViewDataEntry.USER_ID] = user.id
