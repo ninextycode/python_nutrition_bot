@@ -1,27 +1,20 @@
-import sqlalchemy as sa
 from database.common_sql import get_session
 from enum import Enum, auto
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from database.food_database_model import User, MealEaten, NutritionType
+from database.food_database_model import MealEaten, NutritionType
 from database.select import select_meals
-from chatbot import dialog_utils, config
-from telegram.constants import ParseMode
-import datetime
+from chatbot import dialog_utils
+from chatbot.config import DataKeys
 import telegram.error
 import logging
-from telegram import ReplyKeyboardRemove
-import traceback
 
 
 logger = logging.getLogger(__name__)
-no_weight_nutrition_keys = [n for n in NutritionType if n != NutritionType.WEIGHT]
-MEALS_EATEN_DB = "MEALS_EATEN_DB"
 
 
 class MealsEatenViewDataEntry(Enum):
-    USER_ID = auto()
-    SINGLE_MEAL_ID = auto()
-    USER_TIMEZONE = auto()
+    USER = auto()
+    SINGLE_MEAL = auto()
     DATE = auto()
     DATAVIEW_CHAT_ID_MESSAGE_ID = auto()
 
@@ -58,6 +51,8 @@ class InlineKeyData(TextEnum):
     ADD_MEAL = auto()
     DATE_NAVIGATION = auto()
     DELETE_MEAL = auto()
+    CONFIRM_DELETE_MEAL = auto()
+    BACK_TO_SINGLE_MEAL_VIEW = auto()
     EDIT_MEAL = auto()
     BACK_TO_DAY_VIEW = auto()
 
@@ -93,15 +88,18 @@ class DateNavigationOption(PayloadValueEnum):
 
 
 async def message_day_meals(update, context, update_existing):
-    dialog_data = context.user_data[MEALS_EATEN_DB]
+    dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
 
     date = dialog_data[MealsEatenViewDataEntry.DATE]
 
     with get_session() as session:
-        meals = get_day_meals(session, date, dialog_data)
+        meals = select_meals.get_meals_for_one_day(
+            session, date,
+            dialog_data[MealsEatenViewDataEntry.USER]
+        )
 
     nutrition_total = NutritionType.sum_nutrition_as_dict(meals)
-    no_weight_keys = [n for n in NutritionType if n != NutritionType.WEIGHT]
+    no_weight_keys = NutritionType.without_weight()
     message = (
         date.strftime("%A %d %B %Y") + "\n"
         "      " + " / ".join([n.value for n in NutritionType if n != NutritionType.WEIGHT]) + "\n" +
@@ -122,7 +120,10 @@ def get_meals_inline_keyboard_markup(meals: list[MealEaten]):
         meal_nutrition_dict = meal.nutrition_as_dict()
         message = (
             meal.name + "\n" +
-            " / ".join([f"{meal_nutrition_dict[k]:.0f}" for k in no_weight_nutrition_keys])
+            " / ".join([
+                f"{meal_nutrition_dict[k]:.0f}" for k
+                in NutritionType.without_weight()
+            ])
         )
 
         buttons.append(
@@ -152,27 +153,24 @@ def get_meals_inline_keyboard_markup(meals: list[MealEaten]):
     return InlineKeyboardMarkup(button_rows)
 
 
-def get_day_meals(session, date, dialog_data):
-    user_id = dialog_data[MealsEatenViewDataEntry.USER_ID]
-    user_timezone = dialog_data[MealsEatenViewDataEntry.USER_TIMEZONE]
+async def deactivate_dataview_message(context):
+    # deletes interactive keyboard
+    dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
+    if MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID not in dialog_data:
+        logger.warning("dataview message data does not exist, message cannot be deactivated")
+        return
 
-    if isinstance(date, datetime.datetime):
-        date = date.date()
-
-    start_day = datetime.datetime.combine(
-        date, datetime.time(0, 0),
-        tzinfo=user_timezone
-    )
-    one_day_offset = datetime.timedelta(days=1)
-    next_day = start_day + one_day_offset
-    meals_day = select_meals.select_meals_eaten_right_exclude_to(
-        session, user_id, start_day, next_day
-    )
-    return meals_day
+    chat_id, message_id = dialog_data.pop(MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID)
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id, reply_markup=None
+        )
+    except telegram.error.BadRequest as e:
+        dialog_utils.pass_exception_if_message_not_modified(e)
 
 
 async def delete_dataview_message(context):
-    dialog_data = context.user_data[MEALS_EATEN_DB]
+    dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
     if MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID not in dialog_data:
         logger.warning("dataview message data does not exist, message cannot be deleted")
         return
@@ -187,22 +185,14 @@ async def ask_for_date(update):
     await dialog_utils.no_markup_message(update, question)
 
 
-async def message_single_meal(update, context, meal_id, update_existing=True):
-    with get_session() as session:
-        meal = select_meals.select_meal_eaten_by_meal_id(session, meal_id)
+async def message_single_meal(update, context, meal: MealEaten):
+    message = get_single_meal_message(meal) + "\n"
+    reply_markup = single_meal_inline_keyboard_markup()
 
-    if meal is None:
-        error_message = f"Meal with id {meal_id} does not exist"
-        logger.error(error_message)
-        raise ValueError(error_message)
-
-    message = meal.describe()
-    reply_markup = get_single_meal_inline_keyboard_markup()
-
-    await send_dataview_message(update, context, message, reply_markup, update_existing)
+    await send_dataview_message(update, context, message, reply_markup, update_existing=True)
 
 
-def get_single_meal_inline_keyboard_markup():
+def single_meal_inline_keyboard_markup():
     buttons = [
         [InlineKeyboardButton("Delete", callback_data=InlineKeyData.DELETE_MEAL.as_payload_str()),
          InlineKeyboardButton("Edit", callback_data=InlineKeyData.EDIT_MEAL.as_payload_str()),
@@ -211,8 +201,34 @@ def get_single_meal_inline_keyboard_markup():
     return InlineKeyboardMarkup(buttons)
 
 
+async def ask_for_delete_confirmation(update, context, meal: MealEaten):
+    meal_description = get_single_meal_message(meal)
+    question = "Confirm meal entry deletion?"
+    message = meal_description + "\n\n" + question
+    await send_dataview_message(
+        update, context, message,
+        delete_confirmation_markup(), update_existing=True
+    )
+
+
+def get_single_meal_message(meal):
+    return meal.describe()
+
+
+def delete_confirmation_markup():
+    buttons = [[
+        InlineKeyboardButton(
+            "Confirm", callback_data=InlineKeyData.CONFIRM_DELETE_MEAL.as_payload_str()
+        ),
+        InlineKeyboardButton(
+            "Go back", callback_data=InlineKeyData.BACK_TO_SINGLE_MEAL_VIEW.as_payload_str()
+        )
+    ]]
+    return InlineKeyboardMarkup(buttons)
+
+
 async def send_dataview_message(update, context, text, reply_markup, update_existing):
-    dialog_data = context.user_data[MEALS_EATEN_DB]
+    dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
 
     if update_existing and MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID in dialog_data:
         chat_id, message_id = dialog_data[MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID]
@@ -224,7 +240,7 @@ async def send_dataview_message(update, context, text, reply_markup, update_exis
         except telegram.error.BadRequest as e:
             dialog_utils.pass_exception_if_message_not_modified(e)
     else:
-        message_obj = await update.message.reply_text(
+        message_obj = await update.effective_message.reply_text(
             text, reply_markup=reply_markup
         )
         dialog_data[MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID] = (

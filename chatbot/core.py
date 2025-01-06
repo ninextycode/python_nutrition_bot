@@ -1,6 +1,5 @@
 from telegram.ext import ApplicationBuilder, ContextTypes
 from telegram.ext import CommandHandler
-from chatbot import config
 from chatbot.config import secret, Commands
 from chatbot.user.new_user import get_new_user_conversation_handler
 from chatbot.meal.new_meal.new_meal import get_new_meal_conversation_handler
@@ -10,18 +9,28 @@ from chatbot.meal.meals_dataview.meals_eaten_dataview import (
 from chatbot.user.existing_user import get_existing_user_data, delete_user
 import logging
 from itertools import count
-import asyncio
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
+from chatbot import dialog_utils
 
 logger = logging.getLogger(__name__)
+
+
+async def start_handler(update, context):
+    commands = [
+        f"/{c.value}" for c in Commands
+    ]
+    message = "\n".join([
+        "Available commands:",
+        *commands
+    ])
+    await dialog_utils.no_markup_message(update, message)
 
 
 def run_bot():
     app = ApplicationBuilder().token(secret).build()
     # config.bot_info = asyncio.run(app.bot.get_me())
 
-    # app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler(Commands.START.value, start_handler))
 
     group_count = count(1)
 
@@ -35,12 +44,12 @@ def run_bot():
     app.add_handler(view_meals_eaten_handler, group=next(group_count))
 
     show_user_data_handler = CommandHandler(
-        Commands.GET_USER_DATA, get_existing_user_data
+        Commands.GET_USER_DATA.value, get_existing_user_data
     )
     app.add_handler(show_user_data_handler, group=next(group_count))
 
     delete_user_handler = CommandHandler(
-        Commands.DELETE_USER, delete_user
+        Commands.DELETE_USER.value, delete_user
     )
     app.add_handler(delete_user_handler, group=next(group_count))
 

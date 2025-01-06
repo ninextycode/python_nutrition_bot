@@ -1,8 +1,13 @@
-from telegram import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
+from database.food_database_model import NutritionType
 from chatbot.config import Commands
 from telegram.ext import ConversationHandler
 from enum import Enum
 import telegram.error
+import re
 
 
 async def no_markup_message(update, message, **kwargs):
@@ -32,7 +37,7 @@ async def wrong_value_message(update, extra_message=None):
 
 async def user_does_not_exist_message(update):
     response = "User does not exist. "
-    response += f"Use /{Commands.NEW_USER} instead"
+    response += f"Use /{Commands.NEW_USER.value} instead"
     await no_markup_message(update, response)
     return ConversationHandler.END
 
@@ -49,6 +54,12 @@ def yes_no_markup():
     )
 
 
+def yes_no_inline_markup():
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(v.value) for v in YesNo]]
+    )
+
+
 def pass_exception_if_message_not_modified(e):
     # telegram raises exception if no change is needed, can be ignored
     if (
@@ -58,3 +69,32 @@ def pass_exception_if_message_not_modified(e):
         pass
     else:
         raise
+
+
+def parse_nutrition_message(text, nutrition_entries=NutritionType):
+    separators = [" ", ",", "/", r"\n", r"\\", "|"]
+    separators_merged = "".join(separators)
+    blocks = [b for b in re.split(rf"[{separators_merged}]", text) if len(b) > 0]
+    values = []
+
+    for block in blocks:
+        # allow users to skip nutrition entries, substitute zeros
+        if len(block) == 0:
+            values.append(0)
+            continue
+
+        try:
+            value = float(block)
+        except ValueError:
+            return None
+
+        values.append(value)
+
+    while len(values) < len(nutrition_entries):
+        values.append(0)
+
+    data = {}
+    for t, value in zip(nutrition_entries, values):
+        data[t] = max(0, value)  # treat negative values like zeroes
+
+    return data

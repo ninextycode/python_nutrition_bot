@@ -3,7 +3,6 @@ from database.select import select_users
 from database.update import update_users
 from chatbot.config import Commands
 from chatbot import dialog_utils
-from chatbot.user import user_utils
 import logging
 
 
@@ -17,11 +16,17 @@ async def get_existing_user_data(update, context):
 
     if user is None:
         await dialog_utils.no_markup_message(
-            update, f"User is missing. Use /{Commands.NEW_USER} command."
+            update, f"User is missing. Use /{Commands.NEW_USER.value} command."
         )
         return
 
-    message = user.describe()
+    message_user = user.describe()
+    message_target = user.user_target_obj.describe()
+    message = (
+        f"{message_user}\n"
+        "\n"
+        f"{message_target}"
+    )
     await dialog_utils.no_markup_message(update, message)
     return
 

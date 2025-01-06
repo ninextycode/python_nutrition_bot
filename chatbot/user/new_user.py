@@ -11,9 +11,13 @@ from database.update import update_users
 from database.select import select_users
 from chatbot.user import user_utils
 from chatbot.user.user_utils import (
-    UserDataEntry, MaleFemaleOption, USER_DATA, GoalOption
+    UserDataEntry, MaleFemaleOption,
+    GoalOption, ActivityLevelOption, ConfirmTargetOption, TargetTypeOption
 )
-from database.food_database_model import User, TimeZone, GoalEntry, MaleFemaleEntry
+from chatbot.config import DataKeys
+from database.food_database_model import (
+    User, TimeZone, GoalSqlEntry, MaleFemaleSqlEntry, ActivityLevelSqlEntry, NutritionType, UserTarget
+)
 from chatbot import dialog_utils
 import logging
 
@@ -30,15 +34,19 @@ class NewUserStages(Enum):
     TIMEZONE = auto()
     HEIGHT = auto()
     WEIGHT = auto()
-    # ACTIVITY_LEVEL
+    ACTIVITY_LEVEL = auto()
     GOAL = auto()
+    KETO = auto()
+    CONFIRM_TARGET = auto()
+    TARGET_VALUES_MANUAL_ENTRY = auto()
+    TARGET_TYPE_MANUAL_ENTRY = auto()
 
 
 def get_new_user_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
-        CommandHandler(Commands.NEW_USER, handle_new_user),
-        CommandHandler(Commands.UPDATE_USER, handle_update_user),
+        CommandHandler(Commands.NEW_USER.value, handle_new_user),
+        CommandHandler(Commands.UPDATE_USER.value, handle_update_user),
     ]
     states = {
         NewUserStages.CHECK_REGISTRATION_PASSWORD: [MessageHandler(text_only_filter, check_reg_password)],
@@ -50,7 +58,18 @@ def get_new_user_conversation_handler():
                                  MessageHandler(text_only_filter, handle_timezone)],
         NewUserStages.HEIGHT: [MessageHandler(text_only_filter, handle_height)],
         NewUserStages.WEIGHT: [MessageHandler(text_only_filter, handle_weight)],
-        NewUserStages.GOAL: [MessageHandler(text_only_filter, handle_goal)]
+        NewUserStages.ACTIVITY_LEVEL: [MessageHandler(text_only_filter, handle_activity_level)],
+        NewUserStages.GOAL: [MessageHandler(text_only_filter, handle_goal)],
+        NewUserStages.KETO: [MessageHandler(text_only_filter, handle_keto_choice)],
+        NewUserStages.CONFIRM_TARGET: [
+            MessageHandler(text_only_filter, handle_confirm_target)
+        ],
+        NewUserStages.TARGET_VALUES_MANUAL_ENTRY: [
+            MessageHandler(text_only_filter, handle_target_values_manual_entry)
+        ],
+        NewUserStages.TARGET_TYPE_MANUAL_ENTRY: [
+            MessageHandler(text_only_filter, handle_target_type_manual_entry)
+        ],
     }
     # allows to restart dialog from the middle
     for k in states.keys():
@@ -69,8 +88,8 @@ def get_new_user_conversation_handler():
 
 
 async def handle_update_user(update, context):
-    context.user_data[USER_DATA] = dict()
-    user_data = context.user_data[USER_DATA]
+    context.user_data[DataKeys.USER_DATA] = dict()
+    user_data = context.user_data[DataKeys.USER_DATA]
 
     tg_id = update.message.from_user.id
 
@@ -93,8 +112,8 @@ async def handle_update_user(update, context):
 
 
 async def handle_new_user(update, context):
-    context.user_data[USER_DATA] = dict()
-    user_data = context.user_data[USER_DATA]
+    context.user_data[DataKeys.USER_DATA] = dict()
+    user_data = context.user_data[DataKeys.USER_DATA]
 
     tg_id = update.message.from_user.id
 
@@ -109,7 +128,7 @@ async def handle_new_user(update, context):
             response += "User activated"
         else:
             response += "User awaits activation"
-        response += f"\nUse /{Commands.UPDATE_USER} instead"
+        response += f"\nUse /{Commands.UPDATE_USER.value} instead"
         await update.message.reply_text(
             response, reply_markup=ReplyKeyboardRemove()
         )
@@ -124,7 +143,7 @@ async def handle_new_user(update, context):
 
 
 async def check_reg_password(update, context):
-    new_user: User = context.user_data[USER_DATA][UserDataEntry.NEW_USER_OBJECT]
+    new_user: User = context.user_data[DataKeys.USER_DATA][UserDataEntry.NEW_USER_OBJECT]
     user_password = update.message.text
     if user_password == registration_password:
         new_user.name = update.effective_user.first_name
@@ -137,8 +156,7 @@ async def check_reg_password(update, context):
 
 
 async def handle_confirm_name(update, context):
-    user_data = context.user_data[USER_DATA]
-    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    user_data = context.user_data[DataKeys.USER_DATA]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
     confirm = update.message.text
@@ -167,7 +185,7 @@ async def handle_confirm_name(update, context):
 
 
 async def handle_name(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     name = update.message.text
 
@@ -186,7 +204,7 @@ async def handle_name(update, context):
 
 
 async def handle_gender(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
@@ -196,7 +214,7 @@ async def handle_gender(update, context):
         await user_utils.ask_gender_question(update)
         return NewUserStages.GENDER
 
-    new_user.gender_obj = MaleFemaleEntry[MaleFemaleOption(gender).name].value
+    new_user.gender_obj = MaleFemaleSqlEntry[MaleFemaleOption(gender).name].value
 
     if old_user is not None:
         existing_dob = old_user.date_of_birth
@@ -208,7 +226,7 @@ async def handle_gender(update, context):
 
 
 async def handle_date_of_birth(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
@@ -243,7 +261,7 @@ async def handle_date_of_birth(update, context):
 
 
 async def handle_timezone(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
     user_location = update.message.location
@@ -256,7 +274,7 @@ async def handle_timezone(update, context):
                 lng=user_location.longitude,
                 lat=user_location.latitude
             )
-        except Exception:
+        except ValueError:
             pass
     else:
         timezone_str = update.message.text
@@ -286,7 +304,7 @@ async def handle_timezone(update, context):
 
 
 async def handle_height(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
     height_str = update.message.text
@@ -314,7 +332,7 @@ async def handle_height(update, context):
 
 
 async def handle_weight(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     weight_str = update.message.text
 
@@ -331,12 +349,44 @@ async def handle_weight(update, context):
 
     new_user.weight = weight_kg
 
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
+    if old_user is not None:
+        new_user.goal_obj = old_user.goal_obj
+        new_user.activity_level_obj = old_user.activity_level_obj
+        new_user.user_target_obj = old_user.user_target_obj
+
+        await user_utils.ask_to_confirm_target(
+            update, new_user.user_target_obj
+        )
+        return NewUserStages.CONFIRM_TARGET
+    else:
+        await user_utils.ask_activity_level(update)
+        return NewUserStages.ACTIVITY_LEVEL
+
+
+async def handle_activity_level(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+
+    activity_level = update.message.text
+    if activity_level not in ActivityLevelOption:
+        await dialog_utils.wrong_value_message(update)
+        await user_utils.ask_activity_level(update)
+
+    try:
+        new_user.activity_level_obj = ActivityLevelSqlEntry[ActivityLevelOption(activity_level).name].value
+    except KeyError:
+        await dialog_utils.wrong_value_message(
+            update, f"Database entry for \"{activity_level}\" goal does not exist"
+        )
+        await user_utils.ask_activity_level(update)
+
     await user_utils.ask_goal_question(update)
     return NewUserStages.GOAL
 
 
 async def handle_goal(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     goal = update.message.text
     if goal not in GoalOption:
@@ -344,18 +394,101 @@ async def handle_goal(update, context):
         await user_utils.ask_goal_question(update)
 
     try:
-        new_user.goal_obj = GoalEntry[GoalOption(goal).name].value
+        new_user.goal_obj = GoalSqlEntry[GoalOption(goal).name].value
     except KeyError:
         await dialog_utils.wrong_value_message(
             update, f"Database entry for \"{goal}\" goal does not exist"
         )
         await user_utils.ask_goal_question(update)
 
-    return await process_new_user_data(update, context)
+    await user_utils.ask_if_keto(update)
+    return NewUserStages.KETO
+
+
+async def handle_keto_choice(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+
+    is_keto_val = update.message.text
+    if is_keto_val not in dialog_utils.YesNo:
+        await dialog_utils.wrong_value_message(update)
+        await user_utils.ask_if_keto(update)
+        return NewUserStages.KETO
+    user_data[UserDataEntry.IS_KETO] = (is_keto_val == dialog_utils.YesNo.YES.value)
+    user_utils.assign_target_obj(user_data)
+
+    user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    await user_utils.ask_to_confirm_target(update, user.user_target_obj)
+    return NewUserStages.CONFIRM_TARGET
+
+
+async def handle_confirm_target(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+    user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+
+    confirm_response = update.message.text
+
+    if confirm_response == ConfirmTargetOption.CONFIRM.value:
+        await dialog_utils.no_markup_message(update, "Nutrition target confirmed")
+        return await process_new_user_data(update, context)
+    elif confirm_response == ConfirmTargetOption.CHOOSE_DIFFERENT.value:
+        await user_utils.ask_activity_level(update)
+        return NewUserStages.ACTIVITY_LEVEL
+    elif confirm_response == ConfirmTargetOption.ENTER_MANUALLY.value:
+        await user_utils.ask_to_enter_target_manually(update)
+        return NewUserStages.TARGET_VALUES_MANUAL_ENTRY
+    else:
+        await user_utils.ask_to_confirm_target(update, user.user_target_obj)
+        return NewUserStages.CONFIRM_TARGET
+
+
+async def handle_target_values_manual_entry(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+    user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    nutrition_text = update.message.text
+
+    nutrition_data = dialog_utils.parse_nutrition_message(
+        nutrition_text, NutritionType.without_weight()
+    )
+
+    if nutrition_data is None:
+        await dialog_utils.wrong_value_message(update, "Nutrition string parsing failed.")
+        await user_utils.ask_to_enter_target_manually(update)
+        return NewUserStages.TARGET_VALUES_MANUAL_ENTRY
+
+    if user.user_target_obj is None:
+        user.user_target_obj = UserTarget()
+
+    user.user_target_obj.calories = nutrition_data[NutritionType.CALORIES]
+    user.user_target_obj.protein = nutrition_data[NutritionType.PROTEIN]
+    user.user_target_obj.fat = nutrition_data[NutritionType.FAT]
+    user.user_target_obj.carbs = nutrition_data[NutritionType.CARBS]
+
+    await user_utils.ask_target_type(update)
+    return NewUserStages.TARGET_TYPE_MANUAL_ENTRY
+
+
+async def handle_target_type_manual_entry(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+    user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    target_type_text = update.message.text
+
+    if target_type_text == TargetTypeOption.MINIMUM.value:
+        user.user_target_obj.target_type = "MINIMUM"
+    elif target_type_text == TargetTypeOption.MAXIMUM.value:
+        user.user_target_obj.target_type = "MAXIMUM"
+    else:
+        await dialog_utils.wrong_value_message(update)
+        await user_utils.ask_target_type(update)
+        return NewUserStages.TARGET_TYPE_MANUAL_ENTRY
+
+    user_data = context.user_data[DataKeys.USER_DATA]
+    user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    await user_utils.ask_to_confirm_target(update, user.user_target_obj)
+    return NewUserStages.CONFIRM_TARGET
 
 
 async def process_new_user_data(update, context):
-    user_data = context.user_data[USER_DATA]
+    user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
@@ -365,7 +498,8 @@ async def process_new_user_data(update, context):
         await dialog_utils.no_markup_message(update, "Updating user")
 
     summary = (
-        new_user.describe() + "\n"
+        new_user.describe() + "\n\n" +
+        new_user.user_target_obj.describe() + "\n\n" +
         "Account is approved automatically"
     )
     await dialog_utils.no_markup_message(update, summary)
@@ -386,6 +520,15 @@ async def process_new_user_data(update, context):
 
 
 async def handle_cancel(update, context):
-    user_data = context.user_data[USER_DATA]
-    await user_utils.send_message_on_cancel(update, user_data)
-    return ConversationHandler.END
+    user_data = context.user_data[DataKeys.USER_DATA]
+    message = user_utils.get_message_on_cancel(user_data)
+
+    command = update.message.text[1:]
+    is_cancel_command = command == "cancel"
+    if is_cancel_command:
+        await dialog_utils.no_markup_message(update, message)
+    else:
+        await dialog_utils.keep_markup_message(
+            update, message
+        )
+

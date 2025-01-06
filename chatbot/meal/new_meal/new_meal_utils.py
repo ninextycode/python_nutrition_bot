@@ -1,7 +1,9 @@
 from telegram import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from database.food_database_model import User, UserTarget
+from database.select import select_meals
+from database.common_sql import get_session
 from enum import Enum, auto
-import re
 import telegram.error
 import logging
 import io
@@ -12,12 +14,8 @@ from ai_interface import openai_meal_chat
 from database.food_database_model import (
     MealEaten, NutritionType
 )
-import numpy as np
 
 logger = logging.getLogger(__name__)
-
-
-MEAL_DATA = "MEAL_DATA"
 
 
 class InputMode(Enum):
@@ -57,7 +55,7 @@ class MoreIngredientsOrFinish(Enum):
 
 def assign_nutrition_values_from_dict(meal, nutrition_dict):
     meal.fat = nutrition_dict[NutritionType.FAT]
-    meal.carbs = nutrition_dict[NutritionType.CARB]
+    meal.carbs = nutrition_dict[NutritionType.CARBS]
     meal.protein = nutrition_dict[NutritionType.PROTEIN]
     meal.calories = nutrition_dict[NutritionType.CALORIES]
     meal.weight = nutrition_dict[NutritionType.WEIGHT]
@@ -69,7 +67,7 @@ class KeepUpdateOption(Enum):
 
 
 class MealDataEntry(Enum):
-    USER_NAME = auto()
+    USER = auto()
 
     IS_USING_AI = auto()
     IMAGE_DATA_FOR_AI = auto()
@@ -111,34 +109,6 @@ async def input_mode_question(update):
         reply_markup=ai_manual_markup()
     )
 
-
-def parse_nutrition_message(text):
-    separators = [" ", ",", "/", r"\n", r"\\", "|"]
-    separators_merged = "".join(separators)
-    blocks = [b for b in re.split(rf"[{separators_merged}]", text) if len(b) > 0]
-    values = []
-
-    for block in blocks:
-        # allow users to skip nutrition entries, substitute zeros
-        if len(block) == 0:
-            values.append(0)
-            continue
-
-        try:
-            value = float(block)
-        except ValueError:
-            return None
-
-        values.append(value)
-
-    while len(values) < len(NutritionType):
-        values.append(0)
-
-    data = {}
-    for t, value in zip(NutritionType, values):
-        data[t] = max(0, value)  # treat negative values like zeroes
-
-    return data
 
 
 async def ai_input_question(update):
@@ -309,8 +279,7 @@ def one_line_nutrition_format():
 
     nutrition_format_parts = []
     for i, nutrition in enumerate(nutrition_types_order):
-        nutrition_format = nutrition
-        nutrition_format_parts.append(nutrition_format)
+        nutrition_format_parts.append(nutrition)
     return " / ".join(nutrition_format_parts)
 
 
@@ -325,6 +294,10 @@ async def ask_to_confirm_ai_estimate(update, meal_dialog_data, show_estimates=Tr
         message = estimates + "\n" + question
     else:
         message = question
+
+    warning = get_warning_if_calories_exceeded(meal_dialog_data)
+    if warning is not None:
+        message = message + "\n\n" + warning
 
     # need to use update.effective_message
     # choosing to skip description or image input for AI
@@ -350,9 +323,37 @@ async def ask_to_confirm_manual_entry_data(update, meal_dialog_data, long_nutrit
         meal_data_to_string(meal_dialog_data, long_nutrition) + "\n" +
         "Confirm data?"
     )
+
+    warning = get_warning_if_calories_exceeded(meal_dialog_data)
+    if warning is not None:
+        message = message + "\n\n" + warning
+
     await update.message.reply_text(
         message, reply_markup=confirm_data_markup()
     )
+
+def get_warning_if_calories_exceeded(meal_dialog_data):
+    total_calories, calories_target = get_calories_check_values(meal_dialog_data)
+    user: User = meal_dialog_data[MealDataEntry.USER]
+    print(user.user_target_obj.target_type, total_calories, calories_target)
+    if (
+        user.user_target_obj.target_type == UserTarget.Type.MAXIMUM.value and
+        total_calories > calories_target
+    ):
+        return f"Warning: calories exceeded ({total_calories:.0f} > {calories_target:.0f})"
+    else:
+        return None
+
+def get_calories_check_values(meal_dialog_data):
+    user: User = meal_dialog_data[MealDataEntry.USER]
+    new_meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+
+    calories_target = user.user_target_obj.calories
+    date = user.get_datetime_now().date()
+    with get_session() as session:
+        meals = select_meals.get_meals_for_one_day(session, date, user)
+    total_calories = sum([float(m.calories) for m in meals]) + float(new_meal.calories)
+    return total_calories, calories_target
 
 
 async def describe_ingredients(update, meal_dialog_data, include_total=False):

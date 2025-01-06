@@ -5,9 +5,10 @@ from chatbot.config import Commands
 from enum import Enum, auto
 from chatbot.meal.new_meal import new_meal_utils
 from chatbot.meal.new_meal.new_meal_utils import (
-    MEAL_DATA, MealDataEntry, InputMode, InlineKeyData,
+    MealDataEntry, InputMode, InlineKeyData,
     ConfirmAiOption, ConfirmManualOption, KeepUpdateOption
 )
+from chatbot.config import DataKeys
 from database import common_sql
 from database.food_database_model import MealEaten
 from database.select import select_users
@@ -46,11 +47,12 @@ class NewMealStages(Enum):
 def get_new_meal_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
-        CommandHandler(Commands.NEW_MEAL, handle_new_meal),
+        CommandHandler(Commands.NEW_MEAL.value, handle_new_meal),
     ]
     states = {
         NewMealStages.CHOOSE_INPUT_MODE: [
-            MessageHandler(text_only_filter, handle_choose_input_mode)
+            MessageHandler(text_only_filter, handle_choose_input_mode),
+            MessageHandler(filters.PHOTO, handle_assume_image_for_ai),
         ],
         NewMealStages.ADD_DATA_FOR_AI: [
             MessageHandler(text_only_filter, handle_describe_for_ai),
@@ -119,11 +121,13 @@ def get_new_meal_conversation_handler():
 
 
 async def handle_new_meal(update, context):
-    if MEAL_DATA in context.user_data:
-        await new_meal_utils.remove_last_skip_button(context, context.user_data[MEAL_DATA])
+    if DataKeys.MEAL_DATA in context.user_data:
+        await new_meal_utils.remove_last_skip_button(
+            context, context.user_data[DataKeys.MEAL_DATA]
+        )
 
-    context.user_data[MEAL_DATA] = dict()
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    context.user_data[DataKeys.MEAL_DATA] = dict()
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
 
     with common_sql.get_session() as session:
         existing_user = select_users.select_user_by_telegram_id(
@@ -134,13 +138,13 @@ async def handle_new_meal(update, context):
         await dialog_utils.user_does_not_exist_message(update)
         return ConversationHandler.END
 
-    meal_dialog_data[MealDataEntry.USER_NAME] = existing_user.name
+    meal_dialog_data[MealDataEntry.USER] = existing_user
     meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT] = MealEaten(
         user_id=existing_user.id
     )
 
     await update.message.reply_text(
-        f"Hi {meal_dialog_data[MealDataEntry.USER_NAME]}! Let's add a new meal. \n",
+        f"Hi {meal_dialog_data[MealDataEntry.USER].name}! Let's add a new meal. \n",
         reply_markup=ReplyKeyboardRemove()
     )
     await new_meal_utils.input_mode_question(update)
@@ -148,13 +152,9 @@ async def handle_new_meal(update, context):
 
 
 async def handle_choose_input_mode(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
 
     input_mode = update.message.text
-    if input_mode not in InputMode:
-        await dialog_utils.wrong_value_message(update)
-        await new_meal_utils.input_mode_question(update)
-        return NewMealStages.CHOOSE_INPUT_MODE
 
     meal_dialog_data[MealDataEntry.IS_USING_AI] = (input_mode == InputMode.AI)
 
@@ -171,13 +171,17 @@ async def handle_choose_input_mode(update, context):
         await new_meal_utils.input_mode_question(update)
         return NewMealStages.CHOOSE_INPUT_MODE
     else:
-        await dialog_utils.wrong_value_message(update, "Unexpected value")
-        await new_meal_utils.input_mode_question(update)
-        return NewMealStages.CHOOSE_INPUT_MODE
+        # assume input is a description for AI
+        return await handle_assume_describe_for_ai(update, context)
+
+
+async def handle_assume_describe_for_ai(update, context):
+    await dialog_utils.no_markup_message(update, f"Assuming input for AI")
+    return await handle_describe_for_ai(update, context)
 
 
 async def handle_describe_for_ai(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
 
     description = update.message.text
@@ -191,8 +195,13 @@ async def handle_describe_for_ai(update, context):
         return NewMealStages.CONFIRM_AI_ESTIMATE
 
 
+async def handle_assume_image_for_ai(update, context):
+    await dialog_utils.no_markup_message(update, f"Assuming input for AI")
+    return await handle_image_for_ai(update, context)
+
+
 async def handle_image_for_ai(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
 
     caption = update.message.caption
@@ -235,7 +244,7 @@ async def skip_description_callback(update, context):
     await update.callback_query.answer()
     await update.callback_query.edit_message_reply_markup(None)
 
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     data = update.callback_query.data
     try:
         data_key = MealDataEntry[data]
@@ -266,7 +275,7 @@ async def skip_description_callback(update, context):
 
 
 async def process_ai_request(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     description = meal_dialog_data.get(MealDataEntry.DESCRIPTION_FOR_AI, None)
     image_data = meal_dialog_data.get(MealDataEntry.IMAGE_DATA_FOR_AI, None)
 
@@ -294,7 +303,7 @@ async def process_ai_request(update, context):
 
 
 async def handle_confirm_ai_estimate(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     choice = update.message.text
     if choice == ConfirmAiOption.CONFIRM.value:
         await new_meal_utils.ask_to_save_meal_for_future_use(update)
@@ -315,7 +324,7 @@ async def handle_confirm_ai_estimate(update, context):
 
 
 async def handle_more_info_for_ai(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     extra_info = update.message.text
     prev_ai_messages = meal_dialog_data[MealDataEntry.LAST_AI_MESSAGE_LIST]
 
@@ -344,7 +353,7 @@ async def handle_more_info_for_ai(update, context):
 
 
 async def handle_describe_manually(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     lines = update.message.text.split("\n", 1)
     name = lines[0]
     description = lines[1] if len(lines) > 1 else ""
@@ -363,7 +372,7 @@ async def handle_describe_manually(update, context):
 
 
 async def handle_choose_one_or_many_ingredients(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     decision = update.message.text
 
     if decision == new_meal_utils.OneMultipleIngredients.ONE.value:
@@ -380,10 +389,10 @@ async def handle_choose_one_or_many_ingredients(update, context):
 
 
 async def handle_add_nutrition_single_entry(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     nutrition_text = update.message.text
-    nutrition_data = new_meal_utils.parse_nutrition_message(
-        nutrition_text
+    nutrition_data = dialog_utils.parse_nutrition_message(
+        nutrition_text,
     )
 
     if nutrition_data is None:
@@ -403,8 +412,10 @@ async def handle_add_nutrition_single_entry(update, context):
 
 
 async def handle_add_nutrition_one_of_multiple(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
-    ingredients_nutrition_value = meal_dialog_data.get(MealDataEntry.INGREDIENT_NUTRITION_DATA, [])
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    ingredients_nutrition_value = meal_dialog_data.get(
+        MealDataEntry.INGREDIENT_NUTRITION_DATA, []
+    )
     input_text = update.message.text
     input_lines = input_text.split("\n")
     if len(input_lines) < 2:
@@ -413,7 +424,7 @@ async def handle_add_nutrition_one_of_multiple(update, context):
     else:
         name = input_lines[0]
         nutrition_line = input_lines[1]
-    nutrition_data = new_meal_utils.parse_nutrition_message(
+    nutrition_data = dialog_utils.parse_nutrition_message(
         nutrition_line
     )
     if nutrition_data is None:
@@ -429,14 +440,16 @@ async def handle_add_nutrition_one_of_multiple(update, context):
 
 
 async def handle_choose_more_ingredients_or_finish(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     decision = update.message.text
 
     if decision == new_meal_utils.MoreIngredientsOrFinish.MORE.value:
         await new_meal_utils.ask_for_next_ingredient(update, meal_dialog_data)
         return NewMealStages.ADD_NUTRITION_MULTIPLE_ENTRIES_MANUALLY
     elif decision == new_meal_utils.MoreIngredientsOrFinish.FINISH.value:
-        await new_meal_utils.describe_ingredients(update, meal_dialog_data, include_total=False)
+        await new_meal_utils.describe_ingredients(
+            update, meal_dialog_data, include_total=False
+        )
         new_meal_utils.combine_ingredients(meal_dialog_data)
         await new_meal_utils.ask_to_confirm_manual_entry_data(
             update, meal_dialog_data, long_nutrition=True
@@ -448,7 +461,7 @@ async def handle_choose_more_ingredients_or_finish(update, context):
 
 
 async def handle_confirm_existing_description_manual_entry(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     decision = update.message.text
     if decision == KeepUpdateOption.UPDATE.value:
         await new_meal_utils.ask_for_meal_description(update)
@@ -463,11 +476,13 @@ async def handle_confirm_existing_description_manual_entry(update, context):
 
 
 async def handle_confirm_existing_nutrition_manual_entry(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     decision = update.message.text
     if decision == KeepUpdateOption.UPDATE.value:
-        await new_meal_utils.ask_one_or_many_ingredients_to_enter(update)
-        return NewMealStages.CHOOSE_ENTER_ONE_OR_MANY_INGREDIENTS
+        # when values are adjusted, don't prompt an option with multiple ingredients
+        # prompt only nutrition input as single entry
+        await new_meal_utils.ask_for_single_entry_nutrition(update)
+        return NewMealStages.ADD_NUTRITION_SINGLE_ENTRY_MANUALLY
     elif decision == KeepUpdateOption.KEEP.value:
         await new_meal_utils.ask_to_confirm_manual_entry_data(
             update, meal_dialog_data, long_nutrition=True
@@ -480,7 +495,7 @@ async def handle_confirm_existing_nutrition_manual_entry(update, context):
 
 
 async def handle_confirm_manual_entry_data(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     choice = update.message.text
     if choice == ConfirmManualOption.CONFIRM.value:
         await new_meal_utils.ask_to_save_meal_for_future_use(update)
@@ -501,7 +516,7 @@ async def handle_confirm_manual_entry_data(update, context):
 
 
 async def handle_confirm_save_meal_for_future_use(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     confirm = update.message.text
     if confirm not in dialog_utils.YesNo:
         await dialog_utils.wrong_value_message(update)
@@ -526,25 +541,32 @@ async def skip_save_for_future_use_callback(update, context):
     await update.callback_query.answer()
     await update.callback_query.edit_message_reply_markup(None)
 
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
 
     callback_data = update.callback_query.data
 
     if callback_data == InlineKeyData.SKIP_SAVING_FOR_FUTURE_USE.value:
-        await dialog_utils.no_markup_message(update, "Saving for future use skipped")
+        await dialog_utils.no_markup_message(
+            update, "Saving for future use skipped"
+        )
         meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE] = False
         return await handle_new_meal_data(update, context)
     else:
-        await dialog_utils.no_markup_message(update, "Unexpected data received: " + callback_data)
+        await dialog_utils.no_markup_message(
+            update, "Unexpected data received: " + callback_data
+        )
         await new_meal_utils.ask_for_positive_weight(update, new_meal_utils)
         return NewMealStages.ENTER_CORRECTED_WEIGHT
 
 
 async def handle_corrected_weight(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
 
-    new_weight = new_meal_utils.parse_float(update.message.text)
+    try:
+        new_weight = float(update.message.text)
+    except ValueError:
+        return None
 
     if new_weight is None or new_weight < 0:
         await new_meal_utils.ask_for_positive_weight(update, meal_dialog_data)
@@ -557,7 +579,7 @@ async def handle_corrected_weight(update, context):
 
 
 async def handle_new_meal_data(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
     save_for_future_use = meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE]
 
@@ -589,10 +611,16 @@ async def handle_new_meal_data(update, context):
 
 
 async def handle_cancel(update, context):
-    meal_dialog_data = context.user_data[MEAL_DATA]
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
     message = "New meal entry cancelled"
-    await dialog_utils.keep_markup_message(
-        update, message
-    )
+
+    command = update.message.text[1:]
+    is_cancel_command = command == "cancel"
+    if is_cancel_command:
+        await dialog_utils.no_markup_message(update, message)
+    else:
+        await dialog_utils.keep_markup_message(
+            update, message
+        )
     return ConversationHandler.END

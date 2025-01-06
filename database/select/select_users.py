@@ -1,4 +1,3 @@
-import datetime
 from database.food_database_model import User
 import sqlalchemy as sa
 

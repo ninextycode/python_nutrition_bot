@@ -38,7 +38,6 @@ class Gender(Base):
         autoincrement=True
     )
     gender: Mapped[str] = mapped_column(mysql.VARCHAR(50), nullable=False)
-
     users: Mapped[List["User"]] = relationship("User", back_populates="gender_obj")
 
 
@@ -53,15 +52,22 @@ class Goal(Base):
         autoincrement=True
     )
     goal: Mapped[str] = mapped_column(mysql.VARCHAR(200), nullable=False)
-
     users: Mapped[List["User"]] = relationship("User", back_populates="goal_obj")
 
 
-def validate_timezone_str(tz_s):
-    tz_s = tz_s.strip()
-    if tz_s not in pytz.all_timezones:
-        raise ValueError(f"'{tz_s}' is not recognized as a valid timezone name.")
-    return tz_s
+class ActivityLevel(Base):
+    __tablename__ = "activity_levels"
+    __table_args__ = (
+        sa.UniqueConstraint("name"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        mysql.INTEGER(unsigned=True), primary_key=True, nullable=False,
+        autoincrement=True
+    )
+    name: Mapped[str] = mapped_column(mysql.VARCHAR(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(mysql.VARCHAR(5000), nullable=False)
+    users: Mapped[List["User"]] = relationship("User", back_populates="activity_level_obj")
 
 
 class TimeZone(Base):
@@ -75,12 +81,18 @@ class TimeZone(Base):
         autoincrement=True
     )
     timezone: Mapped[str] = mapped_column(mysql.VARCHAR(200), nullable=False)
-
     users: Mapped[List["User"]] = relationship("User", back_populates="timezone_obj")
+
+    @staticmethod
+    def validate_timezone_str(tz_s):
+        tz_s = tz_s.strip()
+        if tz_s not in pytz.all_timezones:
+            raise ValueError(f"'{tz_s}' is not recognized as a valid timezone name.")
+        return tz_s
 
     @sa.orm.validates("timezone")
     def validate_timezone(self, key, value):
-        value = validate_timezone_str(value)
+        value = TimeZone.validate_timezone_str(value)
         # Prevent renaming of an existing timezone row
         # once inserted (i.e., once `id` is non-None).
         if self.id is not None:
@@ -112,6 +124,7 @@ class User(Base):
     __table_args__ = (
         sa.CheckConstraint("(`weight` >= 0)", name="non_negative_weight"),
         sa.ForeignKeyConstraint(["gender_id"], ["genders.id"]),
+        sa.ForeignKeyConstraint(["activity_level_id"], ["activity_levels.id"]),
         sa.ForeignKeyConstraint(["goal_id"], ["goals.id"]),
         sa.ForeignKeyConstraint(["timezone_id"], ["timezones.id"]),
         sa.UniqueConstraint("telegram_id"),
@@ -130,12 +143,18 @@ class User(Base):
     timezone_id: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), default=1, nullable=False)
     gender_id: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
     goal_id: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
+    activity_level_id: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
+
+
     weight: Mapped[decimal.Decimal] = mapped_column(mysql.DECIMAL(5, 1), nullable=False)
     height: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
     date_of_birth: Mapped[datetime.date] = mapped_column(mysql.DATE, nullable=False)
 
     gender_obj: Mapped["Gender"] = relationship("Gender", back_populates="users", lazy="joined")
     goal_obj: Mapped["Goal"] = relationship("Goal", back_populates="users", lazy="joined")
+    activity_level_obj: Mapped["ActivityLevel"] = relationship(
+        "ActivityLevel", back_populates="users", lazy="joined"
+    )
     timezone_obj: Mapped["TimeZone"] = relationship(
         "TimeZone", back_populates="users", lazy="joined"
     )
@@ -145,10 +164,27 @@ class User(Base):
     meals_for_future_use: Mapped[List["MealForFutureUse"]] = relationship(
         "MealForFutureUse", back_populates="users", cascade="all, delete-orphan"
     )
-    users_targets: Mapped[List["UserTarget"]] = relationship(
-        "UserTarget", back_populates="users",
-        lazy="joined", cascade="all, delete-orphan"
+    user_target_obj: Mapped["UserTarget"] = relationship(
+        "UserTarget", back_populates="user", lazy="joined",
+        cascade="all, delete-orphan"
     )
+
+    def get_datetime_now(self):
+        now = datetime.datetime.now(
+            tz=pytz.timezone(self.timezone_obj.timezone)
+        )
+        return now
+
+    def get_age(self):
+        now = self.get_datetime_now()
+        date_now = now.date()
+        years_diff = date_now.year - self.date_of_birth.year
+        if (
+            date_now.month < self.date_of_birth.month or
+            (date_now.month == self.date_of_birth.month and date_now.day < self.date_of_birth.day)
+        ):
+            years_diff -= 1
+        return years_diff
 
     def describe(self):
         description = (
@@ -203,21 +239,47 @@ class MealEaten(Base):
     def nutrition_as_dict(self):
         return NutritionType.nutrition_as_dict(self)
 
-    def describe(self):
-        if self.created_local_datetime is not None:
-            time_added = self.created_local_datetime.isoformat(sep=' ', timespec='seconds')
+    def describe(self, long_format=True):
+        if long_format:
+            return self.describe_long()
         else:
-            time_added = "<missing>"
+            return self.describe_short()
+
+    def describe_short(self):
+        description = (
+            "Meal data:\n"
+            f" - Name: {self.name}\n"
+            f" - Description: {self.description}\n"
+            f"Energy / Fat / Carbs / Prot / Weight\n"
+            f"{self.calories:.1f} / {self.fat:.1f} / {self.carbs:.1f} / "
+            f"{self.protein:.1} / {self.weight:.1f}"
+        )
+        return description
+
+    def describe_long(self):
+        if self.created_local_datetime is not None:
+            time_entry = self.created_local_datetime.isoformat(sep=' ', timespec='seconds')
+            time_line = f" - Saved At: {time_entry}\n"
+        else:
+            time_line = ""
+
+        total_nutrition = self.fat + self.carbs + self.protein
+        if total_nutrition > 0:
+            p_fat = self.fat / total_nutrition * 100
+            p_carbs = self.carbs / total_nutrition * 100
+            p_protein = self.protein / total_nutrition * 100
+        else:
+            p_fat = p_carbs = p_protein = 0
 
         description = (
             "Meal data:\n"
             f" - Name: {self.name}\n"
             f" - Description: {self.description}\n"
-            f" - Time added: {time_added}\n"
-            f" - Fat: {self.fat:.1f} g\n"
-            f" - Carb: {self.carbs:.1f} g\n"
-            f" - Protein: {self.protein:.1f} g\n"
+            f"{time_line}"
             f" - Calories: {self.calories:.1f} kcal\n"
+            f" - Fat: {self.fat:.1f} g ({p_fat:.0f}%)\n"
+            f" - Carbs: {self.carbs:.1f} g ({p_carbs:.0f}%)\n"
+            f" - Protein: {self.protein:.1f} g ({p_protein:.0f}%)\n"
             f" - Weight: {self.weight:.1f} g"
         )
         return description
@@ -226,9 +288,26 @@ class MealEaten(Base):
 class NutritionType(Enum):
     CALORIES = "Calories"
     FAT = "Fat"
-    CARB = "Carbs"
+    CARBS = "Carbs"
     PROTEIN = "Protein"
     WEIGHT = "Weight"
+
+    @staticmethod
+    def without_weight():
+        return [n for n in NutritionType if n != NutritionType.WEIGHT]
+
+    def calories(self):
+        # 1g protein = 4 kcal, 1g carbs = 4 kcal, 1g fat = 9 kcal
+        if self == NutritionType.CALORIES:
+            return 1
+        elif self == NutritionType.FAT:
+            return 9
+        elif self == NutritionType.CARBS:
+            return 4
+        elif self == NutritionType.PROTEIN:
+            return 4
+        else:
+            raise ValueError(f"Calories value not defined for {self}")
 
     def unit(self):
         if self == NutritionType.CALORIES:
@@ -242,7 +321,7 @@ class NutritionType(Enum):
             NutritionType.CALORIES: meal.calories,
             NutritionType.FAT: meal.fat,
             NutritionType.PROTEIN: meal.protein,
-            NutritionType.CARB: meal.carbs,
+            NutritionType.CARBS: meal.carbs,
             NutritionType.WEIGHT: meal.weight
         }
 
@@ -252,7 +331,7 @@ class NutritionType(Enum):
             NutritionType.CALORIES: sum([m.calories for m in meals]),
             NutritionType.FAT: sum([m.fat for m in meals]),
             NutritionType.PROTEIN: sum([m.protein for m in meals]),
-            NutritionType.CARB: sum([m.carbs for m in meals]),
+            NutritionType.CARBS: sum([m.carbs for m in meals]),
             NutritionType.WEIGHT: sum([m.weight for m in meals])
         }
 
@@ -296,8 +375,12 @@ class UserTarget(Base):
     __tablename__ = "users_targets"
     __table_args__ = (
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
-        sa.UniqueConstraint("user_id")
+        sa.UniqueConstraint("user_id"),
     )
+
+    class Type(Enum):
+        MAXIMUM = "MAXIMUM"
+        MINIMUM = "MINIMUM"
 
     id: Mapped[int] = mapped_column(
         mysql.INTEGER(unsigned=True), primary_key=True, nullable=False, autoincrement=True
@@ -307,5 +390,33 @@ class UserTarget(Base):
     protein: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
     fat: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
     carbs: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
+    target_type: Mapped[str] = mapped_column(
+        mysql.ENUM(*[t.value for t in Type]), nullable=False
+    )
+    user: Mapped["User"] = relationship(
+        "User", back_populates="user_target_obj",
+    )
 
-    users: Mapped["User"] = relationship("User", back_populates="users_targets")
+    def describe(self):
+        if self.target_type == UserTarget.Type.MAXIMUM.value:
+            type_description = "Consume no more than the following amount"
+        else:
+            type_description = "Consume at least the following amount"
+
+        total_nutrition = self.fat + self.carbs + self.protein
+        if total_nutrition > 0:
+            p_fat = self.fat / total_nutrition * 100
+            p_carbs = self.carbs / total_nutrition * 100
+            p_protein = self.protein / total_nutrition * 100
+        else:
+            p_fat = p_carbs = p_protein = 0
+
+        description = (
+            f"Nutrition target:\n"
+            f"{type_description}\n"
+            f" - Calories: {self.calories:.1f} kcal\n"
+            f" - Fat: {self.fat:.1f} g ({p_fat:.0f}%)\n"
+            f" - Carbs: {self.carbs:.1f} g ({p_carbs:.0f}%)\n"
+            f" - Protein: {self.protein:.1f} g ({p_protein:.0f}%)"
+        )
+        return description

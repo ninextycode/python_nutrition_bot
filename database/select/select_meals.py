@@ -1,7 +1,8 @@
-import datetime
+import pytz
 
-from database.food_database_model import *
+from database.food_database_model import User, MealEaten, MealForFutureUse
 import sqlalchemy as sa
+import datetime
 
 
 def select_meals_for_future_use(session, user_id):
@@ -11,7 +12,7 @@ def select_meals_for_future_use(session, user_id):
         ).order_by(
             MealForFutureUse.name.asc()
         )
-    )
+    ).fetchall()
     return meals
 
 
@@ -73,3 +74,22 @@ def select_meal_eaten_by_meal_id(
     session, meal_id
 ) -> MealEaten:
     return session.scalar(sa.select(MealEaten).where(MealEaten.id == meal_id))
+
+
+def get_meals_for_one_day(session, date, user: User):
+    user_id = user.id
+    user_timezone = user.timezone_obj.timezone
+
+    if isinstance(date, datetime.datetime):
+        date = date.date()
+
+    start_day = datetime.datetime.combine(
+        date, datetime.time(0, 0),
+        tzinfo=pytz.timezone(user_timezone)
+    )
+    one_day_offset = datetime.timedelta(days=1)
+    next_day = start_day + one_day_offset
+    meals_day = select_meals_eaten_right_exclude_to(
+        session, user_id, start_day, next_day
+    )
+    return meals_day

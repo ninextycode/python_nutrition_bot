@@ -16,6 +16,19 @@ services:
     networks:
       - mysql_network
 
+  python_telegram_bot_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - mysql_service
+    environment:
+      IS_PRODUCTION: ${IS_PRODUCTION:-False}
+      MYSQL_HOST: "mysql_service"
+    networks:
+      - mysql_network
+    command: python3 main.py
+
 volumes:
   mysql_volume:
 
