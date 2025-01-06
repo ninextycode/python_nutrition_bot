@@ -615,8 +615,8 @@ async def handle_cancel(update, context):
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
     message = "New meal entry cancelled"
 
-    command = update.message.text[1:]
-    is_cancel_command = command == "cancel"
+    command = update.message.text
+    is_cancel_command = command.lower() in ["/cancel", "cancel"]
     if is_cancel_command:
         await dialog_utils.no_markup_message(update, message)
     else:

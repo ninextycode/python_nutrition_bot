@@ -523,8 +523,8 @@ async def handle_cancel(update, context):
     user_data = context.user_data[DataKeys.USER_DATA]
     message = user_utils.get_message_on_cancel(user_data)
 
-    command = update.message.text[1:]
-    is_cancel_command = command == "cancel"
+    command = update.message.text
+    is_cancel_command = command.lower() in ["/cancel", "cancel"]
     if is_cancel_command:
         await dialog_utils.no_markup_message(update, message)
     else:

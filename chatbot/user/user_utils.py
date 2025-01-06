@@ -36,7 +36,7 @@ ActivityLevelOption = ActivityLevelValue
 
 class ConfirmTargetOption(Enum):
     CONFIRM = "Confirm"
-    CHOOSE_DIFFERENT = "Choose different"
+    CHOOSE_DIFFERENT = "Estimate automatically"
     ENTER_MANUALLY = "Enter manually"
 
 

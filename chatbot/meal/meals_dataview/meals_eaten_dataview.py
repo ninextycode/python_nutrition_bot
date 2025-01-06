@@ -228,8 +228,8 @@ async def handle_cancel(update, context):
 
     message = "Meals view dialog ended"
 
-    command = update.message.text[1:]
-    is_cancel_command = command == "cancel"
+    command = update.message.text
+    is_cancel_command = command.lower() in ["/cancel", "cancel"]
     if is_cancel_command:
         await dialog_utils.no_markup_message(update, message)
     else:
