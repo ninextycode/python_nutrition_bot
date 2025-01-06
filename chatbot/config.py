@@ -2,8 +2,7 @@ import pint
 import os
 from enum import Enum, auto
 
-
-is_production = bool(os.getenv("IS_PRODUCTION", False))
+is_production = os.getenv("IS_PRODUCTION", "false").lower() == "true"
 
 if is_production:
     secret = open("secrets/telegram_secret_production.txt").read()

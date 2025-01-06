@@ -17,6 +17,7 @@ services:
       - mysql_network
 
   python_telegram_bot_service:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile

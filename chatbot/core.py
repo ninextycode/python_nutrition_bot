@@ -1,6 +1,6 @@
 from telegram.ext import ApplicationBuilder, ContextTypes
 from telegram.ext import CommandHandler
-from chatbot.config import secret, Commands
+from chatbot.config import secret, Commands, is_production
 from chatbot.user.new_user import get_new_user_conversation_handler
 from chatbot.meal.new_meal.new_meal import get_new_meal_conversation_handler
 from chatbot.meal.meals_dataview.meals_eaten_dataview import (
@@ -53,5 +53,8 @@ def run_bot():
     )
     app.add_handler(delete_user_handler, group=next(group_count))
 
+    logger.warning(
+        f"starting telegram bot, is_production={is_production}"
+    )
     # Run the bot until the user presses Ctrl-C
     app.run_polling(allowed_updates=Update.ALL_TYPES)
