@@ -531,4 +531,4 @@ async def handle_cancel(update, context):
         await dialog_utils.keep_markup_message(
             update, message
         )
-
+    return ConversationHandler.END
