@@ -1,0 +1,1 @@
+0 0 * * * (/mysql_backup_service/periodical_backup.sh >> /var/log/periodical_backup.log 2>&1)
