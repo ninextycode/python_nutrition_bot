@@ -6,5 +6,5 @@ echo ${MYSQL_HOST} > /mysql_backup_service/mysql_host.txt
 /mysql_backup_service/first_backup.sh
 
 touch /var/log/periodical_backup.log
-cron -l2
+cron -l 2
 tail -f /var/log/periodical_backup.log
