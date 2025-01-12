@@ -4,7 +4,7 @@ services:
     image: mysql:9.0.1
     volumes:
       - mysql_volume:/var/lib/mysql
-      - ./secrets/mysql:/secrets/mysql
+      - ./secrets/mysql:/secrets/mysql:ro
       - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
     environment:
       MYSQL_ROOT_PASSWORD_FILE: "/secrets/mysql/root_password.txt"
@@ -29,6 +29,24 @@ services:
     networks:
       - mysql_network
     command: python3 main.py
+
+  mysql_backup_service:
+    init: true
+    restart: unless-stopped
+    build:
+      context: ./mysql_backup_service
+      dockerfile: Dockerfile
+    environment:
+      MYSQL_HOST: "mysql_service"
+      NEED_BACKUP_ON_RESTART: True
+    volumes:
+      - ./mysql_backup_dumps:/mysql_backup_dumps
+      - ./secrets/mysql:/secrets/mysql:ro
+    depends_on:
+      - mysql_service
+    networks:
+      - mysql_network
+
 
 volumes:
   mysql_volume:
