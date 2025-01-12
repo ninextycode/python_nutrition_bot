@@ -27,12 +27,13 @@ mysqldump \
   --user="${MYSQL_USER}" \
   --password="${MYSQL_PASSWORD}" \
   "${MYSQL_DATABASE}" \
-  > "${DUMP_FILE}"
+  > ${DUMP_FILE}
 
 if [ $? -eq 0 ]; then
   chmod a+rw ${DUMP_FILE}
   echo "Backup successful: ${DUMP_FILE}"
 else
+  rm -f ${DUMP_FILE}
   echo "Backup failed."
   exit 1
 fi
