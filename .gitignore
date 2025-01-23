@@ -8,5 +8,7 @@ images
 docker-entrypoint-initdb.d/*test.sql
 tests
 /*test.py
+/*test.ipynb
 /activate
 /mysql_backup_dumps
+.ipynb_checkpoints/

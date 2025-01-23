@@ -149,6 +149,9 @@ class User(Base):
     weight: Mapped[decimal.Decimal] = mapped_column(mysql.DECIMAL(5, 1), nullable=False)
     height: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False)
     date_of_birth: Mapped[datetime.date] = mapped_column(mysql.DATE, nullable=False)
+    last_birthday_congratulated: Mapped[mysql.YEAR] = mapped_column(
+        mysql.YEAR, nullable=True
+    )
 
     gender_obj: Mapped["Gender"] = relationship("Gender", back_populates="users", lazy="joined")
     goal_obj: Mapped["Goal"] = relationship("Goal", back_populates="users", lazy="joined")
