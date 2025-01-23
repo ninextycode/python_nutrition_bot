@@ -2,6 +2,7 @@ from database.food_database_model.food_database_objects import *
 from database import common_sql
 from enum import Enum
 import logging
+import traceback
 
 
 logger = logging.getLogger(__name__)
@@ -59,33 +60,50 @@ def get_activity_level(session, activity_level):
     )
 
 
-with common_sql.get_session() as _session:
-    class MaleFemaleSqlEntry(Enum):
-        MALE = get_male(_session)
-        FEMALE = get_female(_session)
+def _log_exception(e):
+    stack_trace = traceback.format_exc()
+    logger.error("Failed to load SQL constant entries", e)
+    logger.error(stack_trace)
 
 
-    class GoalSqlEntry(Enum):
-        LOSE_WEIGHT = get_goal(_session, GoalValue.LOSE_WEIGHT)
-        LOSE_WEIGHT_SLOWLY = get_goal(_session, GoalValue.LOSE_WEIGHT_SLOWLY)
-        MAINTAIN_WEIGHT = get_goal(_session, GoalValue.MAINTAIN_WEIGHT)
-        GAIN_MUSCLE_SLOWLY = get_goal(_session, GoalValue.GAIN_MUSCLE_SLOWLY)
-        GAIN_MUSCLE = get_goal(_session, GoalValue.GAIN_MUSCLE)
+try:
+    with common_sql.get_session() as _session:
+        class MaleFemaleSqlEntry(Enum):
+            MALE = get_male(_session)
+            FEMALE = get_female(_session)
+except Exception as e:
+    _log_exception(e)
 
 
-    class ActivityLevelSqlEntry(Enum):
-        LITTLE_TO_NO = get_activity_level(
-            _session, ActivityLevelValue.LITTLE_TO_NO
-        )
-        MODERATE_1_3_PER_WEEK = get_activity_level(
-            _session, ActivityLevelValue.MODERATE_1_3_PER_WEEK
-        )
-        HIGH_3_5_PER_WEEK = get_activity_level(
-            _session, ActivityLevelValue.HIGH_3_5_PER_WEEK
-        )
-        VERY_HIGH_6_7_PER_WEEK = get_activity_level(
-            _session, ActivityLevelValue.VERY_HIGH_6_7_PER_WEEK
-        )
-        HYPERACTIVE_2_HOURS_PER_DAY = get_activity_level(
-            _session, ActivityLevelValue.HYPERACTIVE_2_HOURS_PER_DAY
-        )
+try:
+    with common_sql.get_session() as _session:
+        class GoalSqlEntry(Enum):
+            LOSE_WEIGHT = get_goal(_session, GoalValue.LOSE_WEIGHT)
+            LOSE_WEIGHT_SLOWLY = get_goal(_session, GoalValue.LOSE_WEIGHT_SLOWLY)
+            MAINTAIN_WEIGHT = get_goal(_session, GoalValue.MAINTAIN_WEIGHT)
+            GAIN_MUSCLE_SLOWLY = get_goal(_session, GoalValue.GAIN_MUSCLE_SLOWLY)
+            GAIN_MUSCLE = get_goal(_session, GoalValue.GAIN_MUSCLE)
+except Exception as e:
+    _log_exception(e)
+
+
+try:
+    with common_sql.get_session() as _session:
+        class ActivityLevelSqlEntry(Enum):
+            LITTLE_TO_NO = get_activity_level(
+                _session, ActivityLevelValue.LITTLE_TO_NO
+            )
+            MODERATE_1_3_PER_WEEK = get_activity_level(
+                _session, ActivityLevelValue.MODERATE_1_3_PER_WEEK
+            )
+            HIGH_3_5_PER_WEEK = get_activity_level(
+                _session, ActivityLevelValue.HIGH_3_5_PER_WEEK
+            )
+            VERY_HIGH_6_7_PER_WEEK = get_activity_level(
+                _session, ActivityLevelValue.VERY_HIGH_6_7_PER_WEEK
+            )
+            HYPERACTIVE_2_HOURS_PER_DAY = get_activity_level(
+                _session, ActivityLevelValue.HYPERACTIVE_2_HOURS_PER_DAY
+            )
+except Exception as e:
+    _log_exception(e)

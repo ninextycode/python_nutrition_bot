@@ -6,6 +6,8 @@ import logging
 import copy
 from pathlib import Path
 
+from database.food_database_model import MealEaten
+
 logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=config.key)
@@ -44,7 +46,7 @@ system_prompt = (
 )
 
 
-class MealDataOutputFormat(BaseModel):
+class MealDataOutput(BaseModel):
     name: str
     description: str
     protein: float
@@ -60,14 +62,14 @@ class MealDataOutputFormat(BaseModel):
     def default(
         name="", description="",
         protein=0, fat=0, carbohydrate=0,
-        calorie=0, total_weight=0,
+        calories=0, total_weight=0,
         success_flag=False,
         error_message=""
     ):
-        return MealDataOutputFormat(
+        return MealDataOutput(
             name=name, description=description,
             protein=protein, fat=fat, carbohydrate=carbohydrate,
-            calorie=calorie, total_weight=total_weight,
+            calories=calories, total_weight=total_weight,
             success_flag=success_flag,
             error_message=error_message
         )
@@ -101,7 +103,7 @@ class ImageData(BaseModel):
 
 
 class AiResponse(BaseModel):
-    meal_data: MealDataOutputFormat
+    meal_data: MealDataOutput
     message_list: list
 
 
@@ -140,6 +142,25 @@ def get_update_request_message(request):
     return update_message
 
 
+def get_assistant_message_from_eaten_meal(meal_obj: MealEaten):
+    ai_output_meal_data = MealDataOutput(
+        name=meal_obj.name,
+        description=meal_obj.description,
+        protein=meal_obj.protein,
+        fat=meal_obj.fat,
+        carbohydrate=meal_obj.carbs,
+        calories=meal_obj.calories,
+        total_weight=meal_obj.weight,
+        success_flag=True,
+        error_message=""
+    )
+    json_meal_str = ai_output_meal_data.model_dump_json()
+    data_message = {
+        "role": "assistant",
+        "content": json_meal_str
+    }
+    return data_message
+
 def get_meal_estimate(description=None, image_data=None):
     if description is None and image_data is None:
         raise TypeError("Both description and image data are missing")
@@ -161,7 +182,7 @@ def get_ai_response(messages):
     except OpenAIError as e:
         error_message = f"OpenAIError exception: {e}"
         logger.error(error_message)
-        meal_data = MealDataOutputFormat.default(
+        meal_data = MealDataOutput.default(
             success_flag=False, error_message=error_message
         )
     else:
@@ -179,7 +200,7 @@ def parse_completion(completion):
         refusal = completion.choices[0].message.refusal
         error_message = f"OpenAI parsing failed with the following message: {refusal}"
         logger.error(error_message)
-        return MealDataOutputFormat.default(
+        return MealDataOutput.default(
             success_flag=False, error_message=error_message
         )
 
@@ -221,7 +242,7 @@ def get_text_content(text):
 def get_message_completion(messages):
     logger.info("get_message_completion, messages", remove_non_text_messages(messages))
     completion = client.beta.chat.completions.parse(
-        response_format=MealDataOutputFormat,
+        response_format=MealDataOutput,
         model=model,
         messages=messages
     )

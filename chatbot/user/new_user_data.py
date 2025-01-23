@@ -1,6 +1,9 @@
+import copy
 from telegram import ReplyKeyboardRemove
 from telegram.ext import filters
-from telegram.ext import ConversationHandler, MessageHandler, CommandHandler
+from telegram.ext import (
+    ConversationHandler, MessageHandler, CommandHandler, CallbackQueryHandler
+)
 from enum import Enum, auto
 import dateparser
 import timezonefinder
@@ -12,9 +15,11 @@ from database.select import select_users
 from chatbot.user import user_utils
 from chatbot.user.user_utils import (
     UserDataEntry, MaleFemaleOption,
-    GoalOption, ActivityLevelOption, ConfirmTargetOption, TargetTypeOption
+    GoalOption, ActivityLevelOption, ConfirmTargetOption, TargetTypeOption,
+    NewValueOption
 )
 from chatbot.config import DataKeys
+from chatbot.inline_key_utils import StartConversationDataKey
 from database.food_database_model import (
     User, TimeZone, GoalSqlEntry, MaleFemaleSqlEntry, ActivityLevelSqlEntry, NutritionType, UserTarget
 )
@@ -42,16 +47,26 @@ class NewUserStages(Enum):
     TARGET_TYPE_MANUAL_ENTRY = auto()
 
 
-def get_new_user_conversation_handler():
+def get_new_user_update_user_conv_handlers():
     text_only_filter = filters.TEXT & ~filters.COMMAND
-    entry_points = [
-        CommandHandler(Commands.NEW_USER.value, handle_new_user),
-        CommandHandler(Commands.UPDATE_USER.value, handle_update_user),
+    new_user_entry_points = [
+        CommandHandler(Commands.NEW_USER.value, handle_new_user_command),
+        CallbackQueryHandler(
+            callback=handle_new_user_command,
+            pattern=StartConversationDataKey.NEW_USER.value
+        )
+    ]
+    update_user_entry_points = [
+        CommandHandler(Commands.UPDATE_USER.value, handle_update_user_command),
+        CallbackQueryHandler(
+            callback=handle_update_user_command,
+            pattern=StartConversationDataKey.UPDATE_USER.value
+        )
     ]
     states = {
         NewUserStages.CHECK_REGISTRATION_PASSWORD: [MessageHandler(text_only_filter, check_reg_password)],
         NewUserStages.CONFIRM_NAME: [MessageHandler(text_only_filter, handle_confirm_name)],
-        NewUserStages.NAME: [MessageHandler(text_only_filter, handle_name)],
+        NewUserStages.NAME: [MessageHandler(text_only_filter, handle_name_choice)],
         NewUserStages.GENDER: [MessageHandler(text_only_filter, handle_gender)],
         NewUserStages.DATE_OF_BIRTH: [MessageHandler(text_only_filter, handle_date_of_birth)],
         NewUserStages.TIMEZONE: [MessageHandler(filters.LOCATION, handle_timezone),
@@ -71,56 +86,38 @@ def get_new_user_conversation_handler():
             MessageHandler(text_only_filter, handle_target_type_manual_entry)
         ],
     }
-    # allows to restart dialog from the middle
+    new_user_states = copy.deepcopy(states)
+    update_user_states = copy.deepcopy(states)
+
+
+    # allows to restart dialog in the middle of conversation
     for k in states.keys():
-        states[k].extend(entry_points)
+        new_user_states[k].extend(new_user_entry_points)
+    for k in states.keys():
+        update_user_states[k].extend(update_user_entry_points)
 
     fallbacks = [
-        CommandHandler("cancel", handle_cancel),
-        MessageHandler(filters.COMMAND, handle_cancel)
+        CommandHandler(Commands.CANCEL.value, handle_cancel)
     ]
-    handler = ConversationHandler(
-        entry_points=entry_points,
-        states=states,
+
+    new_user_handler = ConversationHandler(
+        entry_points=new_user_entry_points,
+        states=new_user_states,
         fallbacks=fallbacks,
     )
-    return handler
-
-
-async def handle_update_user(update, context):
-    context.user_data[DataKeys.USER_DATA] = dict()
-    user_data = context.user_data[DataKeys.USER_DATA]
-
-    tg_id = update.message.from_user.id
-
-    with common_sql.get_session() as session:
-        old_user = select_users.select_user_by_telegram_id(
-            session, tg_id
-        )
-
-    if old_user is None:
-        await dialog_utils.user_does_not_exist_message(update)
-        return ConversationHandler.END
-
-    user_data[UserDataEntry.OLD_USER_OBJECT] = old_user
-    user_data[UserDataEntry.NEW_USER_OBJECT] = User(
-        telegram_id=update.message.from_user.id
+    update_user_handler = ConversationHandler(
+        entry_points=update_user_entry_points,
+        states=update_user_states,
+        fallbacks=fallbacks,
     )
-
-    await user_utils.ask_to_confirm_existing_name(update, old_user.name)
-    return NewUserStages.CONFIRM_NAME
+    return new_user_handler, update_user_handler
 
 
-async def handle_new_user(update, context):
+async def handle_new_user_command(update, context):
     context.user_data[DataKeys.USER_DATA] = dict()
     user_data = context.user_data[DataKeys.USER_DATA]
 
-    tg_id = update.message.from_user.id
-
-    with common_sql.get_session() as session:
-        old_user = select_users.select_user_by_telegram_id(
-            session, tg_id
-        )
+    old_user = dialog_utils.get_tg_user_obj(update)
 
     if old_user is not None:
         response = "User exists. "
@@ -155,42 +152,61 @@ async def check_reg_password(update, context):
         return NewUserStages.CHECK_REGISTRATION_PASSWORD
 
 
+async def handle_update_user_command(update, context):
+    context.user_data[DataKeys.USER_DATA] = dict()
+    user_data = context.user_data[DataKeys.USER_DATA]
+
+    old_user = dialog_utils.get_tg_user_obj(update)
+
+    if old_user is None:
+        await dialog_utils.user_does_not_exist_message(update)
+        return ConversationHandler.END
+
+    new_user = User(
+        telegram_id=update.message.from_user.id,
+        name=old_user.name
+    )
+
+    user_data[UserDataEntry.OLD_USER_OBJECT] = old_user
+    user_data[UserDataEntry.NEW_USER_OBJECT] = new_user
+
+    await user_utils.ask_to_confirm_existing_name(update, new_user.name)
+    return NewUserStages.CONFIRM_NAME
+
+
 async def handle_confirm_name(update, context):
     user_data = context.user_data[DataKeys.USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
 
-    confirm = update.message.text
-    if confirm not in dialog_utils.YesNo:
-        await dialog_utils.wrong_value_message(update)
-        await update.message.reply_text(
-            "Is this your correct name?",
-            reply_markup=dialog_utils.yes_no_markup()
-        )
-        return NewUserStages.CONFIRM_NAME
-    confirmed = (confirm == dialog_utils.YesNo.YES.value)
+    tg_name = update.effective_user.first_name
+    name_options = {tg_name, new_user.name}
+    if old_user is not None:
+        name_options.add(old_user.name)
 
-    if confirmed:
+    confirm_text = update.message.text
+
+    if confirm_text == dialog_utils.YesNo.YES.value:
         await user_utils.ask_gender_question(update)
         return NewUserStages.GENDER
-
-    if old_user is not None:
-        tg_name = update.effective_user.first_name
-        existing_name = old_user.name
-        old_names = {tg_name, existing_name}
+    elif confirm_text == dialog_utils.YesNo.NO.value:
+        await user_utils.ask_name_choice(update, name_options)
+        return NewUserStages.NAME
     else:
-        old_names = []
+        await dialog_utils.wrong_value_message(update)
+        await user_utils.ask_to_confirm_existing_name(
+            update, new_user.name
+        )
+        return NewUserStages.CONFIRM_NAME
 
-    await user_utils.ask_for_name(update, old_names)
-    return NewUserStages.NAME
 
-
-async def handle_name(update, context):
+async def handle_name_choice(update, context):
     user_data = context.user_data[DataKeys.USER_DATA]
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     name = update.message.text
 
-    if name == user_utils.new_value_query:
-        await user_utils.ask_for_name(update)
+    if name == NewValueOption.NEW_VALUE:
+        await user_utils.ask_name_choice(update, old_names=None)
         return NewUserStages.NAME
 
     if len(name) == 0:
@@ -232,7 +248,7 @@ async def handle_date_of_birth(update, context):
 
     date_of_birth_str = update.message.text
 
-    if date_of_birth_str == user_utils.new_value_query:
+    if date_of_birth_str == NewValueOption.NEW_VALUE:
         await user_utils.ask_date_of_birth_question(update)
         return NewUserStages.DATE_OF_BIRTH
 
@@ -309,7 +325,7 @@ async def handle_height(update, context):
     old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
     height_str = update.message.text
 
-    if height_str == user_utils.new_value_query:
+    if height_str == NewValueOption.NEW_VALUE:
         await user_utils.ask_height_question(update)
         return NewUserStages.HEIGHT
 
@@ -336,7 +352,7 @@ async def handle_weight(update, context):
     new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
     weight_str = update.message.text
 
-    if weight_str == user_utils.new_value_query:
+    if weight_str == NewValueOption.NEW_VALUE:
         await user_utils.ask_weight_question(update)
         return NewUserStages.WEIGHT
 
@@ -522,13 +538,5 @@ async def process_new_user_data(update, context):
 async def handle_cancel(update, context):
     user_data = context.user_data[DataKeys.USER_DATA]
     message = user_utils.get_message_on_cancel(user_data)
-
-    command = update.message.text
-    is_cancel_command = command.lower() in ["/cancel", "cancel"]
-    if is_cancel_command:
-        await dialog_utils.no_markup_message(update, message)
-    else:
-        await dialog_utils.keep_markup_message(
-            update, message
-        )
+    await dialog_utils.no_markup_message(update, message)
     return ConversationHandler.END

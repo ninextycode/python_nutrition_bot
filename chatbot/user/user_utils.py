@@ -8,13 +8,9 @@ import logging
 import pint
 import re
 import datetime
+from chatbot.dialog_utils import is_collection
 
 logger = logging.getLogger(__name__)
-
-
-class UpdateUserMode(Enum):
-    NEW = auto()
-    UPDATE = auto()
 
 
 class UserDataEntry(Enum):
@@ -45,14 +41,15 @@ class TargetTypeOption(Enum):
     MINIMUM = "Eat at least as much as than the target"
 
 
-new_value_query = "Enter new value"
+class NewValueOption(Enum):
+    NEW_VALUE = "Enter new value"
 
 
 async def ask_question(update, question, old_answers=None):
-    if old_answers is not None:
-        reply_markup = old_value_or_enter_new_markup(old_answers)
-    else:
+    if old_answers is None or (is_collection(old_answers) and len(old_answers) == 0):
         reply_markup = ReplyKeyboardRemove()
+    else:
+        reply_markup = old_value_or_enter_new_markup(old_answers)
 
     await update.message.reply_text(
         question, reply_markup=reply_markup
@@ -63,13 +60,13 @@ def old_value_or_enter_new_markup(old_values=None):
     if old_values is None:
         old_values = []
 
-    if not isinstance(old_values, (list, tuple)):
+    if not(is_collection(old_values)):
         old_values = [old_values]
 
     old_values = list(set(old_values))
 
     layout = [[f"{v}"] for v in old_values]
-    layout.append([new_value_query])
+    layout.append([NewValueOption.NEW_VALUE])
     return ReplyKeyboardMarkup(
         layout, resize_keyboard=True
     )
@@ -95,13 +92,13 @@ async def ask_for_password(update):
 
 async def ask_to_confirm_existing_name(update, existing_name):
     await update.message.reply_text(
-        f"Hi {existing_name}! Let's set up a new user. \n" +
+        f"Hi {existing_name}!\n" +
         "Is this your correct name?",
         reply_markup=dialog_utils.yes_no_markup(),
     )
 
 
-async def ask_for_name(update, old_names=None):
+async def ask_name_choice(update, old_names=None):
     await ask_question(
         update, "Please enter your name", old_names
     )

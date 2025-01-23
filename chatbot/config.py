@@ -22,10 +22,12 @@ class Commands(Enum):
     NEW_USER = "new_user"
     GET_USER_DATA = "get_user_data"
     VIEW_MEALS_SAVED_FOR_FUTURE_USE = "view_meals_saved"
+    CANCEL = "cancel"
     DELETE_USER = "delete_user"
 
 
 class DataKeys(Enum):
+    PARENT_DATA = auto()
     MEAL_DATA = auto()
     MEALS_EATEN_DATAVIEW = auto()
     USER_DATA = auto()

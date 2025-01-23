@@ -239,30 +239,56 @@ class MealEaten(Base):
     def nutrition_as_dict(self):
         return NutritionType.nutrition_as_dict(self)
 
-    def describe(self, long_format=True):
+    def describe(self, long_format=True, with_time=True):
         if long_format:
-            return self.describe_long()
+            return self.describe_long(with_time)
         else:
-            return self.describe_short()
+            return self.describe_short(with_time)
 
-    def describe_short(self):
+    def _time_description_line(self, with_time):
+        if with_time and self.created_local_datetime is not None:
+            time_entry = self.created_local_datetime.strftime("%d %b %Y %H:%M")
+            time_line = f" - Saved at: {time_entry}\n"
+        else:
+            time_line = ""
+        return time_line
+
+    def describe_short(self, with_time=True):
         description = (
-            "Meal data:\n"
-            f" - Name: {self.name}\n"
-            f" - Description: {self.description}\n"
+            "Meal data:\n" +
+            f" - Name: {self.name}\n" +
+            f" - Description: {self.description}\n" +
+            self._time_description_line(with_time)
+        )
+        description = description + self.describe_nutrition_only_short()
+        return description
+
+    def describe_long(self, with_time=True):
+        description = (
+            "Meal data:\n" +
+            f" - Name: {self.name}\n" +
+            f" - Description: {self.description}\n" +
+            self._time_description_line(with_time)
+        )
+        description = description + self.describe_nutrition_only_long()
+        return description
+
+    def describe_nutrition_only(self, long_format=True):
+        if long_format:
+            return self.describe_nutrition_only_long()
+        else:
+            return self.describe_nutrition_only_short()
+
+    def describe_nutrition_only_short(self):
+        description = (
+            " - Nutrition:\n"
             f"Energy / Fat / Carbs / Prot / Weight\n"
             f"{self.calories:.1f} / {self.fat:.1f} / {self.carbs:.1f} / "
-            f"{self.protein:.1} / {self.weight:.1f}"
+            f"{self.protein:.1f} / {self.weight:.1f}"
         )
         return description
 
-    def describe_long(self):
-        if self.created_local_datetime is not None:
-            time_entry = self.created_local_datetime.isoformat(sep=' ', timespec='seconds')
-            time_line = f" - Saved At: {time_entry}\n"
-        else:
-            time_line = ""
-
+    def describe_nutrition_only_long(self):
         total_nutrition = self.fat + self.carbs + self.protein
         if total_nutrition > 0:
             p_fat = self.fat / total_nutrition * 100
@@ -272,10 +298,6 @@ class MealEaten(Base):
             p_fat = p_carbs = p_protein = 0
 
         description = (
-            "Meal data:\n"
-            f" - Name: {self.name}\n"
-            f" - Description: {self.description}\n"
-            f"{time_line}"
             f" - Calories: {self.calories:.1f} kcal\n"
             f" - Fat: {self.fat:.1f} g ({p_fat:.0f}%)\n"
             f" - Carbs: {self.carbs:.1f} g ({p_carbs:.0f}%)\n"

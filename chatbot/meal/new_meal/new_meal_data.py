@@ -1,28 +1,40 @@
 from telegram.ext import filters
-from telegram import ReplyKeyboardRemove
 from telegram.ext import ConversationHandler, MessageHandler, CommandHandler, CallbackQueryHandler
 from chatbot.config import Commands
 from enum import Enum, auto
 from chatbot.meal.new_meal import new_meal_utils
 from chatbot.meal.new_meal.new_meal_utils import (
-    MealDataEntry, InputMode, InlineKeyData,
-    ConfirmAiOption, ConfirmManualOption, KeepUpdateOption
+    MealDataEntry, InputMode, NewMealInlineDataKey, TimeIsNowDataKey,
+    ConfirmAiOption, ConfirmManualOption, KeepUpdateOption, SkipDescriptionBtnValue, EditMode, MealDataMode
 )
 from chatbot.config import DataKeys
+from chatbot.parent_child_utils import pop_parent_data, ConversationID, ChildEndStage
+from chatbot.start_menu import start_menu_utils
 from database import common_sql
-from database.food_database_model import MealEaten
-from database.select import select_users
+from database.common_sql import get_session
+from database.food_database_model import MealEaten, User
 from database.update import update_meals
+from database.select import select_meals
 from chatbot import dialog_utils
+from chatbot.inline_key_utils import (
+    InlineButtonDataKeyValue, StartConversationDataKey
+)
 from ai_interface import openai_meal_chat
 import logging
 import traceback
+import datetime
+import dateparser
+from chatbot.meal.meals_dataview import meals_dataview_utils
+
 
 logger = logging.getLogger(__name__)
 
 
 class NewMealStages(Enum):
+    ADD_MEAL_TIME = auto()
+
     CHOOSE_INPUT_MODE = auto()
+    CHOOSE_EDIT_MODE = auto()
 
     ADD_DATA_FOR_AI = auto()
     ADD_IMAGE_FOR_AI = auto()
@@ -47,9 +59,24 @@ class NewMealStages(Enum):
 def get_new_meal_conversation_handler():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
-        CommandHandler(Commands.NEW_MEAL.value, handle_new_meal),
+        CommandHandler(Commands.NEW_MEAL.value, handle_new_meal_command),
+        CallbackQueryHandler(
+            callback=handle_new_meal_inline_callback,
+            pattern=StartConversationDataKey.NEW_MEAL.to_str()
+        ),
+        CallbackQueryHandler(
+            callback=handle_edit_meal_inline_callback,
+            pattern=StartConversationDataKey.EDIT_MEAL.to_str()
+        )
     ]
     states = {
+        NewMealStages.ADD_MEAL_TIME: [
+            MessageHandler(text_only_filter, handle_meal_time),
+            CallbackQueryHandler(
+                time_is_now_callback,
+                pattern=TimeIsNowDataKey.TIME_IS_NOW.to_str()
+            ),
+        ],
         NewMealStages.CHOOSE_INPUT_MODE: [
             MessageHandler(text_only_filter, handle_choose_input_mode),
             MessageHandler(filters.PHOTO, handle_assume_image_for_ai),
@@ -60,11 +87,17 @@ def get_new_meal_conversation_handler():
         ],
         NewMealStages.ADD_IMAGE_FOR_AI: [
             MessageHandler(filters.PHOTO, handle_image_for_ai),
-            CallbackQueryHandler(callback=skip_description_callback)
+            CallbackQueryHandler(
+                callback=skip_description_callback,
+                pattern=NewMealInlineDataKey.SKIP_DESCRIPTION_FOR_AI.to_str()
+            )
         ],
         NewMealStages.ADD_DESCRIPTION_FOR_AI: [
             MessageHandler(text_only_filter, handle_describe_for_ai),
-            CallbackQueryHandler(callback=skip_description_callback)
+            CallbackQueryHandler(
+                callback=skip_description_callback,
+                pattern=NewMealInlineDataKey.SKIP_DESCRIPTION_FOR_AI.to_str()
+            )
         ],
         NewMealStages.CONFIRM_AI_ESTIMATE: [
             MessageHandler(text_only_filter, handle_confirm_ai_estimate)
@@ -101,65 +134,154 @@ def get_new_meal_conversation_handler():
         ],
         NewMealStages.ENTER_CORRECTED_WEIGHT: [
             MessageHandler(text_only_filter, handle_corrected_weight),
-            CallbackQueryHandler(callback=skip_save_for_future_use_callback)
+            CallbackQueryHandler(
+                callback=skip_save_for_future_use_callback,
+                pattern=NewMealInlineDataKey.SKIP_SAVING_FOR_FUTURE_USE.to_str()
+            )
         ]
     }
     # allows to restart dialog from the middle
     for k in states.keys():
         states[k].extend(entry_points)
+
     fallbacks = [
-        CommandHandler("cancel", handle_cancel),
-        # this would cancel the dialog if any new command is called
-        MessageHandler(filters.COMMAND, handle_cancel)
+        CommandHandler(Commands.CANCEL.value, handle_cancel)
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
         states=states,
         fallbacks=fallbacks,
+        map_to_parent={
+            ConversationHandler.END: ChildEndStage.NEW_MEAL_END
+        }
     )
     return handler
 
 
-async def handle_new_meal(update, context):
+async def init_meal_dialog_data(update, context):
     if DataKeys.MEAL_DATA in context.user_data:
         await new_meal_utils.remove_last_skip_button(
             context, context.user_data[DataKeys.MEAL_DATA]
         )
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA] = dict()
+    user = dialog_utils.get_tg_user_obj(update)
+    if user is None:
+        await dialog_utils.user_does_not_exist_message(update)
+        raise RuntimeError("User does not exist")
 
-    context.user_data[DataKeys.MEAL_DATA] = dict()
+    meal_dialog_data[MealDataEntry.USER] = user
+
+
+
+async def handle_new_meal_inline_callback(update, context):
+    await dialog_utils.handle_inline_keyboard_callback(
+        update, delete_keyboard=True
+    )
+
+    await init_meal_dialog_data(update, context)
+
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    data_str = update.callback_query.data
+
+    data_value = InlineButtonDataKeyValue.from_str(data_str).value
+
+    parent_id = ConversationID(data_value)
+    meal_dialog_data[MealDataEntry.PARENT_ID] = parent_id
+
+    if parent_id == ConversationID.DAY_VIEW:
+        date = pop_parent_data(context, parent_id, ConversationID.NEW_MEAL)
+        meal_dialog_data[MealDataEntry.MEAL_DATE] = date
+        if not isinstance(date, datetime.date):
+            logger.warning(
+                "new_meal is a child conversation\n"
+                "callback data object for new_meal conversation exists, "
+                f"but parent data = {date}, expected datetime.date"
+            )
+    else:
+        user: User = meal_dialog_data[MealDataEntry.USER]
+        meal_dialog_data[MealDataEntry.MEAL_DATE] = user.get_datetime_now().date()
+
+    return await start_new_meal(update, context)
+
+
+async def handle_new_meal_command(update, context):
+    await init_meal_dialog_data(update, context)
+    return await start_new_meal(update, context)
+
+
+async def start_new_meal(update, context):
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    meal_dialog_data[MealDataEntry.DATA_MODE] = MealDataMode.NEW
+    user = meal_dialog_data[MealDataEntry.USER]
+    new_meal = MealEaten(user_id=user.id)
+    meal_dialog_data[MealDataEntry.MEAL_OBJECT] = new_meal
+
+    await dialog_utils.no_markup_message(
+        update,
+        f"Hi {meal_dialog_data[MealDataEntry.USER].name}! Let's add a new meal. \n",
+    )
+
+    custom_date = meal_dialog_data.get(MealDataEntry.MEAL_DATE, None)
+    await new_meal_utils.ask_time_of_meal(update, user, custom_date)
+    return NewMealStages.ADD_MEAL_TIME
+
+
+async def handle_meal_time(update, context):
     meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
 
-    with common_sql.get_session() as session:
-        existing_user = select_users.select_user_by_telegram_id(
-            session, update.message.from_user.id
-        )
+    time_s = update.message.text
+    dt_parsed = dateparser.parse(time_s)
 
-    if existing_user is None:
-        await dialog_utils.user_does_not_exist_message(update)
-        return ConversationHandler.END
+    if dt_parsed is None:
+        await dialog_utils.wrong_value_message(update, "Cannot determine time")
+        existing_user = meal_dialog_data[MealDataEntry.USER]
+        date = meal_dialog_data[MealDataEntry.MEAL_DATE]
+        await new_meal_utils.ask_time_of_meal(update, existing_user, date)
+        return NewMealStages.ADD_MEAL_TIME
 
-    meal_dialog_data[MealDataEntry.USER] = existing_user
-    meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT] = MealEaten(
-        user_id=existing_user.id
+    time = dt_parsed.time()
+    date = meal_dialog_data[MealDataEntry.MEAL_DATE]
+    dt = datetime.datetime.combine(date, time)
+
+    new_meal = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
+    new_meal.created_local_datetime = dt
+
+    await new_meal_utils.ask_input_mode(update)
+    return NewMealStages.CHOOSE_INPUT_MODE
+
+
+async def time_is_now_callback(update, context):
+    await dialog_utils.handle_inline_keyboard_callback(
+        update, delete_keyboard=True
     )
 
-    await update.message.reply_text(
-        f"Hi {meal_dialog_data[MealDataEntry.USER].name}! Let's add a new meal. \n",
-        reply_markup=ReplyKeyboardRemove()
+    data = InlineButtonDataKeyValue.from_str(update.callback_query.data)
+    time_now = datetime.datetime.strptime(data.value, "%H:%M").time()
+
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    date = meal_dialog_data[MealDataEntry.MEAL_DATE]
+
+    dt = datetime.datetime.combine(date, time_now)
+
+    new_meal = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
+    new_meal.created_local_datetime = dt
+    await dialog_utils.no_markup_message(
+        update,
+        "Meal time is " + time_now.strftime("%H:%M")
     )
-    await new_meal_utils.input_mode_question(update)
+    await new_meal_utils.ask_input_mode(update)
     return NewMealStages.CHOOSE_INPUT_MODE
 
 
 async def handle_choose_input_mode(update, context):
     meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
 
+    new_meal_utils.reset_ai_data(meal_dialog_data)
+
     input_mode = update.message.text
 
-    meal_dialog_data[MealDataEntry.IS_USING_AI] = (input_mode == InputMode.AI)
-
     if input_mode == InputMode.AI.value:
-        await new_meal_utils.ai_input_question(update)
+        await new_meal_utils.ask_ai_input(update)
         return NewMealStages.ADD_DATA_FOR_AI
 
     elif input_mode == InputMode.MANUAL.value:
@@ -168,7 +290,7 @@ async def handle_choose_input_mode(update, context):
 
     elif input_mode == InputMode.BARCODE.value:
         await dialog_utils.wrong_value_message(update, "not implemented")
-        await new_meal_utils.input_mode_question(update)
+        await new_meal_utils.ask_input_mode(update)
         return NewMealStages.CHOOSE_INPUT_MODE
     else:
         # assume input is a description for AI
@@ -191,8 +313,7 @@ async def handle_describe_for_ai(update, context):
         await new_meal_utils.ask_for_image(update, meal_dialog_data)
         return NewMealStages.ADD_IMAGE_FOR_AI
     else:
-        await process_ai_request(update, context)
-        return NewMealStages.CONFIRM_AI_ESTIMATE
+        return  await process_ai_request(update, context)
 
 
 async def handle_assume_image_for_ai(update, context):
@@ -236,27 +357,22 @@ async def handle_image_for_ai(update, context):
         await new_meal_utils.ask_for_description(update, meal_dialog_data)
         return NewMealStages.ADD_DESCRIPTION_FOR_AI
     else:
-        await process_ai_request(update, context)
-        return NewMealStages.CONFIRM_AI_ESTIMATE
+        return await process_ai_request(update, context)
 
 
 async def skip_description_callback(update, context):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_reply_markup(None)
+    await dialog_utils.handle_inline_keyboard_callback(
+        update, delete_keyboard=True
+    )
 
     meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
-    data = update.callback_query.data
-    try:
-        data_key = MealDataEntry[data]
-        meal_dialog_data[data_key] = None
-    except KeyError:
-        await dialog_utils.no_markup_message(
-            update, "Unexpected data received: " + data
-        )
+    data = InlineButtonDataKeyValue.from_str(update.callback_query.data)
 
-    if data == InlineKeyData.DESCRIPTION_FOR_AI.value:
+    if data.value == SkipDescriptionBtnValue.DESCRIPTION_FOR_AI.value:
+        meal_dialog_data[MealDataEntry.DESCRIPTION_FOR_AI] = None
         await dialog_utils.no_markup_message(update, "Text description skipped")
-    elif data == InlineKeyData.IMAGE_DATA_FOR_AI.value:
+    elif data.value == SkipDescriptionBtnValue.IMAGE_DATA_FOR_AI.value:
+        meal_dialog_data[MealDataEntry.IMAGE_DATA_FOR_AI] = None
         await dialog_utils.no_markup_message(update, "Image skipped")
     else:
         await dialog_utils.no_markup_message(
@@ -270,8 +386,7 @@ async def skip_description_callback(update, context):
         await new_meal_utils.ask_for_image(update, meal_dialog_data)
         return NewMealStages.ADD_IMAGE_FOR_AI
     else:
-        await process_ai_request(update, context)
-        return NewMealStages.CONFIRM_AI_ESTIMATE
+        return await process_ai_request(update, context)
 
 
 async def process_ai_request(update, context):
@@ -293,12 +408,18 @@ async def process_ai_request(update, context):
     new_data_added = await new_meal_utils.handle_new_ai_response(
         ai_response, update, meal_dialog_data
     )
+
     if not new_data_added:
-        # error was printed by handle_new_ai_response
-        await new_meal_utils.input_mode_question(update)
+        new_meal_utils.reset_ai_data(meal_dialog_data)
+        await dialog_utils.no_markup_message(
+            update, "Please try again"
+        )
+        await new_meal_utils.ask_input_mode(update)
         return NewMealStages.CHOOSE_INPUT_MODE
     else:
-        await new_meal_utils.ask_to_confirm_ai_estimate(update, meal_dialog_data)
+        await new_meal_utils.ask_to_confirm_ai_estimate(
+            update, meal_dialog_data[MealDataEntry.MEAL_OBJECT]
+        )
         return NewMealStages.CONFIRM_AI_ESTIMATE
 
 
@@ -312,12 +433,10 @@ async def handle_confirm_ai_estimate(update, context):
         await new_meal_utils.ask_for_mode_information(update)
         return NewMealStages.ADD_MORE_INFO_FOR_AI
     elif choice == ConfirmAiOption.REENTER_MANUALLY.value:
-        # start the sequence of existing data confirmation
+        # start_menu the sequence of existing data confirmation
         # with an option to manually change it
         await new_meal_utils.ask_to_confirm_existing_description(update, meal_dialog_data)
         return NewMealStages.CONFIRM_EXISTING_NAME_DESCRIPTION
-    elif choice == ConfirmAiOption.CANCEL.value:
-        return await handle_cancel(update, context)
     else:
         # assume the new message is a message with more info for ai
         return await handle_more_info_for_ai(update, context)
@@ -358,7 +477,7 @@ async def handle_describe_manually(update, context):
     name = lines[0]
     description = lines[1] if len(lines) > 1 else ""
 
-    meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+    meal: MealEaten = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
 
     meal.name = name
     meal.description = description
@@ -400,7 +519,7 @@ async def handle_add_nutrition_single_entry(update, context):
         await new_meal_utils.ask_for_single_entry_nutrition(update, format_only=True)
         return NewMealStages.ADD_NUTRITION_SINGLE_ENTRY_MANUALLY
 
-    meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+    meal: MealEaten = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
     new_meal_utils.assign_nutrition_values_from_dict(
         meal, nutrition_data
     )
@@ -505,8 +624,6 @@ async def handle_confirm_manual_entry_data(update, context):
             update, meal_dialog_data
         )
         return NewMealStages.CONFIRM_EXISTING_NAME_DESCRIPTION
-    elif choice == ConfirmAiOption.CANCEL.value:
-        return await handle_cancel(update, context)
     else:
         await dialog_utils.wrong_value_message(update)
         await new_meal_utils.ask_to_confirm_manual_entry_data(
@@ -525,7 +642,7 @@ async def handle_confirm_save_meal_for_future_use(update, context):
     save_for_future_use = (confirm == dialog_utils.YesNo.YES.value)
 
     if save_for_future_use:
-        meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+        meal: MealEaten = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
         if meal.weight > 0:
             meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE] = True
         else:
@@ -538,25 +655,16 @@ async def handle_confirm_save_meal_for_future_use(update, context):
 
 
 async def skip_save_for_future_use_callback(update, context):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_reply_markup(None)
+    await dialog_utils.handle_inline_keyboard_callback(
+        update, delete_keyboard=True
+    )
 
     meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
-
-    callback_data = update.callback_query.data
-
-    if callback_data == InlineKeyData.SKIP_SAVING_FOR_FUTURE_USE.value:
-        await dialog_utils.no_markup_message(
-            update, "Saving for future use skipped"
-        )
-        meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE] = False
-        return await handle_new_meal_data(update, context)
-    else:
-        await dialog_utils.no_markup_message(
-            update, "Unexpected data received: " + callback_data
-        )
-        await new_meal_utils.ask_for_positive_weight(update, new_meal_utils)
-        return NewMealStages.ENTER_CORRECTED_WEIGHT
+    await dialog_utils.no_markup_message(
+        update, "Saving for future use skipped"
+    )
+    meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE] = False
+    return await handle_new_meal_data(update, context)
 
 
 async def handle_corrected_weight(update, context):
@@ -573,14 +681,14 @@ async def handle_corrected_weight(update, context):
         return NewMealStages.ENTER_CORRECTED_WEIGHT
     else:
         meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE] = True
-        meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+        meal: MealEaten = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
         meal.weight = new_weight
         return await handle_new_meal_data(update, context)
 
 
 async def handle_new_meal_data(update, context):
     meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
-    meal: MealEaten = meal_dialog_data[MealDataEntry.NEW_MEAL_OBJECT]
+    meal: MealEaten = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
     save_for_future_use = meal_dialog_data[MealDataEntry.SAVE_FOR_FUTURE_USE]
 
     await dialog_utils.no_markup_message(
@@ -589,10 +697,6 @@ async def handle_new_meal_data(update, context):
 
     try:
         with common_sql.get_session() as session:
-            update_meals.add_new_eaten_meal(session, meal)
-            await dialog_utils.no_markup_message(update, "New meal added")
-            await dialog_utils.no_markup_message(update, meal.describe())
-
             if save_for_future_use:
                 update_meals.add_new_meal_for_future_use_from_meal_eaten(
                     session, meal
@@ -601,26 +705,143 @@ async def handle_new_meal_data(update, context):
                     update, "New meal saved for future use"
                 )
 
+            update_meals.add_new_eaten_meal(session, meal)
+            await new_meal_utils.new_meal_added_message(
+                update, meal,
+                # offer to transfer to meal view dialog only if this is not a child conversation
+                # ie does not have a parent
+                view_meals_inline_btn=MealDataEntry.PARENT_ID not in meal_dialog_data
+            )
+
     except Exception as e:
         logging.exception(e)
         await dialog_utils.no_markup_message(
             update, "Database error"
         )
 
-    return ConversationHandler.END
+    return await end_conversation(update, context)
 
 
 async def handle_cancel(update, context):
-    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    meal_dialog_data = context.user_data.get(DataKeys.MEAL_DATA, dict())
     await new_meal_utils.remove_last_skip_button(context, meal_dialog_data)
     message = "New meal entry cancelled"
+    await dialog_utils.no_markup_message(update, message)
+    return await end_conversation(update, context)
 
-    command = update.message.text
-    is_cancel_command = command.lower() in ["/cancel", "cancel"]
-    if is_cancel_command:
-        await dialog_utils.no_markup_message(update, message)
-    else:
-        await dialog_utils.keep_markup_message(
-            update, message
+
+async def end_conversation(update, context):
+    # delete conversation data before ending new meal conversation
+    meal_dialog_data = context.user_data.pop(DataKeys.MEAL_DATA)
+    if MealDataEntry.PARENT_ID not in meal_dialog_data:
+        return ConversationHandler.END
+
+    parent_id = meal_dialog_data[MealDataEntry.PARENT_ID]
+    if parent_id == ConversationID.DAY_VIEW:
+        # note - if the current conversation is a parent of "meals dataview" conversation
+        # the parent already haas the correct date data to display the correct view
+        await meals_dataview_utils.message_day_meals(
+            update, context, update_existing=False
         )
+    elif parent_id == ConversationID.START_MENU:
+        await start_menu_utils.send_existing_user_options(
+            update, meal_dialog_data[MealDataEntry.USER]
+        )
+    else:
+        logger.error(f"New meal dialog has unexpected parent value {parent_id}")
+
+
     return ConversationHandler.END
+
+
+async def handle_edit_meal_inline_callback(update, context):
+    await init_meal_dialog_data(update, context)
+
+    await dialog_utils.handle_inline_keyboard_callback(
+        update, delete_keyboard=True
+    )
+    data_str = update.callback_query.data
+    data_value = InlineButtonDataKeyValue.from_str(data_str).value
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    meal_dialog_data[MealDataEntry.DATA_MODE] = MealDataMode.UPDATE
+
+    try:
+        meal_id = int(data_value)
+    except (ValueError, TypeError) as e:
+        logger.error(
+            f"Cannot get meal_id for the meal to edit, value is {data_value}"
+        )
+        logger.error(e)
+        return await end_conversation(update, context)
+
+    with get_session() as session:
+        existing_meal = select_meals.select_meal_eaten_by_meal_id(
+            session, meal_id
+        )
+    if existing_meal is None:
+        await dialog_utils.no_markup_message(update, "Meal data is missing")
+        logger.error(f"Meal data for meal_id={meal_id} is missing")
+        return await end_conversation(update, context)
+    meal_dialog_data[MealDataEntry.MEAL_OBJECT] = existing_meal
+    await new_meal_utils.ask_edit_mode(update)
+    return NewMealStages.CHOOSE_EDIT_MODE
+
+
+async def handle_choose_edit_mode(update, context):
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    new_meal_utils.reset_ai_data(meal_dialog_data)
+    input_mode = update.message.text
+
+    if input_mode == EditMode.ADJUST_WITH_AI.value:
+        meal = meal_dialog_data[MealDataEntry.MEAL_OBJECT]
+        meal_dialog_data[MealDataEntry.LAST_AI_MESSAGE_LIST] = \
+            openai_meal_chat.get_assistant_message_from_eaten_meal(meal)
+        await new_meal_utils.ask_for_ai_edit_information(update)
+        return NewMealStages.ADD_MORE_INFO_FOR_AI
+
+    if input_mode == EditMode.MANUAL.value:
+        pass
+        # await new_meal_utils.ask_for_meal_description(update)
+        # return NewMealStages.DESCRIBE_MEAL_MANUALLY
+
+    if input_mode == EditMode.CHANGE_DATE_TIME.value:
+        pass
+        # await new_meal_utils.ask_for_meal_description(update)
+        # return NewMealStages.DESCRIBE_MEAL_MANUALLY
+
+    else:
+        # assume input is a description for AI
+        return await handle_assume_describe_for_ai(update, context)
+
+
+async def handle_edit_info_for_ai(update, context):
+    meal_dialog_data = context.user_data[DataKeys.MEAL_DATA]
+    extra_info = update.message.text
+
+    meal = meal_dialog_data[MealDataEntry.EXISTING_MEAL_OBJECT]
+    prev_ai_messages = meal_dialog_data[MealDataEntry.LAST_AI_MESSAGE_LIST] = [
+        openai_meal_chat.get_assistant_message_from_eaten_meal(meal)
+    ]
+
+    try:
+        await dialog_utils.no_markup_message(update, "Sending request to AI...\nPlease wait")
+        ai_response = openai_meal_chat.update_meal_estimate(
+            prev_ai_messages, extra_info
+        )
+    except Exception as e:
+        logger.error(f"handle_edit_info_for_ai exception: {e}" + "\n" + f"{traceback.format_exc()}")
+        message = f"Error!\n Internal function update_meal_estimate exception\n{e}"
+        await dialog_utils.no_markup_message(update, message)
+        return await handle_cancel(update, context)
+
+    new_data_added = await new_meal_utils.handle_new_ai_response(
+        ai_response, update, meal_dialog_data
+    )
+    if not new_data_added:
+        await dialog_utils.no_markup_message(
+            update, "You can try and send another text message"
+        )
+        return NewMealStages.ADD_MORE_INFO_FOR_AI
+    else:
+        await new_meal_utils.ask_to_confirm_ai_estimate(update, meal_dialog_data)
+        return NewMealStages.CONFIRM_AI_ESTIMATE

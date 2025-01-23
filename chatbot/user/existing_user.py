@@ -7,12 +7,7 @@ import logging
 
 
 async def get_existing_user_data(update, context):
-    tg_id = update.message.from_user.id
-
-    with common_sql.get_session() as session:
-        user = select_users.select_user_by_telegram_id(
-            session, tg_id
-        )
+    user = dialog_utils.get_tg_user_obj(update)
 
     if user is None:
         await dialog_utils.no_markup_message(

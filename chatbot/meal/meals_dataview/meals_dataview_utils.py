@@ -1,3 +1,5 @@
+import datetime
+
 from database.common_sql import get_session
 from enum import Enum, auto
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,6 +9,11 @@ from chatbot import dialog_utils
 from chatbot.config import DataKeys
 import telegram.error
 import logging
+from chatbot import inline_key_utils
+from chatbot.inline_key_utils import (
+    InlineButtonDataKey, InlineButtonDataValueGroup, StartConversationDataKey
+)
+from chatbot.parent_child_utils import ConversationID, set_parent_data
 
 
 logger = logging.getLogger(__name__)
@@ -19,72 +26,31 @@ class MealsEatenViewDataEntry(Enum):
     DATAVIEW_CHAT_ID_MESSAGE_ID = auto()
 
 
-class TextEnum(Enum):
+class MealViewInlineDataKey(InlineButtonDataKey):
+    SINGLE_MEAL_SELECTED = auto()
+    DAY_VIEW_NAVIGATION = auto()
+    SINGLE_MEAL_VIEW_ACTION = auto()
+
+
+class DayViewNavigationBtnValue(InlineButtonDataValueGroup):
     @staticmethod
-    def _generate_next_value_(name, start, count, last_values):
-        return name
-
-
-class InlineKeyDataPayload:
-    def __init__(self, key, value=None):
-        self.key = key.value if isinstance(key, Enum) else key
-        self.value = str(value)
-
-    @staticmethod
-    def from_str(s: str):
-        if " " in s:
-            key, value = s.rsplit(" ", 1)
-        else:
-            key, value = s, None
-        key = InlineKeyData[key].value
-        return InlineKeyDataPayload(key, value)
-
-    def to_str(self):
-        if self.value is None:
-            return self.key
-        else:
-            return self.key + " " + self.value
-
-
-class InlineKeyData(TextEnum):
-    SINGLE_MEAL_SELECTION = auto()
-    ADD_MEAL = auto()
-    DATE_NAVIGATION = auto()
-    DELETE_MEAL = auto()
-    CONFIRM_DELETE_MEAL = auto()
-    BACK_TO_SINGLE_MEAL_VIEW = auto()
-    EDIT_MEAL = auto()
-    BACK_TO_DAY_VIEW = auto()
-
-    def as_payload(self, value=None):
-        return InlineKeyDataPayload(self, value)
-
-    def as_payload_str(self, value=None):
-        return self.as_payload(value).to_str()
-
-
-class PayloadValueEnum(TextEnum):
-    @staticmethod
-    def get_payload_key():
-        return None
-
-    def as_payload(self):
-        return InlineKeyDataPayload(
-            self.__class__.get_payload_key(), self.value
-        )
-
-    def as_payload_str(self):
-        return self.as_payload().to_str()
-
-
-class DateNavigationOption(PayloadValueEnum):
-    @staticmethod
-    def get_payload_key():
-        return InlineKeyData.DATE_NAVIGATION
-
+    def class_key():
+        return MealViewInlineDataKey.DAY_VIEW_NAVIGATION
     NEXT = auto()
     PREVIOUS = auto()
     ENTER_DATE = auto()
+    BACK_TO_START_MENU = auto()
+
+
+class SingleMealActionBtnValue(InlineButtonDataValueGroup):
+    @staticmethod
+    def class_key():
+        return MealViewInlineDataKey.SINGLE_MEAL_VIEW_ACTION
+    DELETE_MEAL = auto()
+    CONFIRM_DELETE_MEAL = auto()
+    BACK_TO_SINGLE_MEAL_VIEW = auto()
+    # EDIT_MEAL = auto() TODO
+    BACK_TO_DAY_VIEW = auto()
 
 
 async def message_day_meals(update, context, update_existing):
@@ -106,7 +72,7 @@ async def message_day_meals(update, context, update_existing):
         "Total: " + " / ".join([f"{nutrition_total[k]:.0f}" for k in no_weight_keys])
     )
 
-    reply_markup = get_meals_inline_keyboard_markup(meals)
+    reply_markup = get_meals_inline_keyboard_markup(meals, context)
 
     await send_dataview_message(
         update, context, message, reply_markup,
@@ -114,7 +80,7 @@ async def message_day_meals(update, context, update_existing):
     )
 
 
-def get_meals_inline_keyboard_markup(meals: list[MealEaten]):
+def get_meals_inline_keyboard_markup(meals: list[MealEaten], context):
     buttons = []
     for meal in meals:
         meal_nutrition_dict = meal.nutrition_as_dict()
@@ -125,31 +91,45 @@ def get_meals_inline_keyboard_markup(meals: list[MealEaten]):
                 in NutritionType.without_weight()
             ])
         )
-
         buttons.append(
             InlineKeyboardButton(
-                message, callback_data=InlineKeyData.SINGLE_MEAL_SELECTION.as_payload_str(meal.id)
+                message,
+                callback_data=MealViewInlineDataKey.SINGLE_MEAL_SELECTED.to_str(
+                    value=meal.id
+                )
             )
         )
+
     food_button_rows = [[b] for b in buttons]
     add_meal_button = [
         InlineKeyboardButton(
-            "️Add a new meal", callback_data=InlineKeyData.ADD_MEAL.as_payload_str()
+            "Start menu",
+            callback_data=DayViewNavigationBtnValue.BACK_TO_START_MENU.to_key_value_str()
+        ),
+        InlineKeyboardButton(
+            "️Add new meal",
+            callback_data=StartConversationDataKey.NEW_MEAL.to_str(
+                ConversationID.DAY_VIEW.value
+            )
         )
     ]
+
+    dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
+    date = dialog_data[MealsEatenViewDataEntry.DATE]
+    set_parent_data(context, ConversationID.DAY_VIEW, ConversationID.NEW_MEAL, date)
+
     navigation_buttons = [
         InlineKeyboardButton(
-            "◀", callback_data=DateNavigationOption.PREVIOUS.as_payload_str()
+            "◀", callback_data=DayViewNavigationBtnValue.PREVIOUS.to_key_value_str()
         ),
         InlineKeyboardButton(
-            "Date", callback_data=DateNavigationOption.ENTER_DATE.as_payload_str()
+            "Date", callback_data=DayViewNavigationBtnValue.ENTER_DATE.to_key_value_str()
         ),
         InlineKeyboardButton(
-            "▶", callback_data=DateNavigationOption.NEXT.as_payload_str()
+            "▶", callback_data=DayViewNavigationBtnValue.NEXT.to_key_value_str()
         ),
     ]
-    # TODO no [add_meal_button] for now - add later
-    button_rows = food_button_rows + [navigation_buttons]
+    button_rows = food_button_rows + [add_meal_button] + [navigation_buttons]
     return InlineKeyboardMarkup(button_rows)
 
 
@@ -161,12 +141,7 @@ async def deactivate_dataview_message(context):
         return
 
     chat_id, message_id = dialog_data.pop(MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID)
-    try:
-        await context.bot.edit_message_reply_markup(
-            chat_id=chat_id, message_id=message_id, reply_markup=None
-        )
-    except telegram.error.BadRequest as e:
-        dialog_utils.pass_exception_if_message_not_modified(e)
+    await dialog_utils.delete_inline_keyboard(context, chat_id, message_id)
 
 
 async def delete_dataview_message(context):
@@ -185,20 +160,21 @@ async def ask_for_date(update):
     await dialog_utils.no_markup_message(update, question)
 
 
-async def message_single_meal(update, context, meal: MealEaten):
+async def show_single_meal(update, context, meal: MealEaten):
     message = get_single_meal_message(meal) + "\n"
-    reply_markup = single_meal_inline_keyboard_markup()
-
+    reply_markup = single_meal_inline_keyboard_markup(meal.id)
     await send_dataview_message(update, context, message, reply_markup, update_existing=True)
 
 
-def single_meal_inline_keyboard_markup():
-    buttons = [
-        [InlineKeyboardButton("Delete", callback_data=InlineKeyData.DELETE_MEAL.as_payload_str()),
-         InlineKeyboardButton("Edit", callback_data=InlineKeyData.EDIT_MEAL.as_payload_str()),
-         InlineKeyboardButton("Back", callback_data=InlineKeyData.BACK_TO_DAY_VIEW.as_payload_str())]
-    ]
-    return InlineKeyboardMarkup(buttons)
+def single_meal_inline_keyboard_markup(meal_id):
+    return inline_key_utils.inline_keys_markup(
+        ["Delete", "Edit", "Back"],
+        [
+            SingleMealActionBtnValue.DELETE_MEAL.to_key_value_str(),
+            StartConversationDataKey.EDIT_MEAL.to_str(meal_id),
+            SingleMealActionBtnValue.BACK_TO_DAY_VIEW.to_key_value_str()
+        ]
+    )
 
 
 async def ask_for_delete_confirmation(update, context, meal: MealEaten):
@@ -216,15 +192,13 @@ def get_single_meal_message(meal):
 
 
 def delete_confirmation_markup():
-    buttons = [[
-        InlineKeyboardButton(
-            "Confirm", callback_data=InlineKeyData.CONFIRM_DELETE_MEAL.as_payload_str()
-        ),
-        InlineKeyboardButton(
-            "Go back", callback_data=InlineKeyData.BACK_TO_SINGLE_MEAL_VIEW.as_payload_str()
-        )
-    ]]
-    return InlineKeyboardMarkup(buttons)
+    return inline_key_utils.inline_keys_markup(
+        ["Confirm", "Go back"],
+        [
+            SingleMealActionBtnValue.CONFIRM_DELETE_MEAL.to_key_value_str(),
+            SingleMealActionBtnValue.BACK_TO_SINGLE_MEAL_VIEW.to_key_value_str()
+        ]
+    )
 
 
 async def send_dataview_message(update, context, text, reply_markup, update_existing):
@@ -232,13 +206,11 @@ async def send_dataview_message(update, context, text, reply_markup, update_exis
 
     if update_existing and MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID in dialog_data:
         chat_id, message_id = dialog_data[MealsEatenViewDataEntry.DATAVIEW_CHAT_ID_MESSAGE_ID]
-        try:
-            await context.bot.edit_message_text(
-                text, reply_markup=reply_markup,
-                chat_id=chat_id, message_id=message_id
-            )
-        except telegram.error.BadRequest as e:
-            dialog_utils.pass_exception_if_message_not_modified(e)
+
+        await dialog_utils.edit_message(
+            context, chat_id=chat_id, message_id=message_id,
+            text=text, reply_markup=reply_markup,
+        )
     else:
         message_obj = await update.effective_message.reply_text(
             text, reply_markup=reply_markup
