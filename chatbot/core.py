@@ -8,6 +8,7 @@ from chatbot.meal.meals_dataview.meals_eaten_dataview import (
     get_meals_eaten_view_conversation_handler
 )
 from chatbot.user.existing_user import get_existing_user_data, delete_user
+from chatbot.user.birthday import get_birthday_handler
 import logging
 from itertools import count
 from telegram import Update
@@ -80,6 +81,9 @@ def run_bot():
     #     Commands.DELETE_USER.value, delete_user
     # )
     # app.add_handler(delete_user_handler, group=next(group_count))
+
+    birthday_handler = get_birthday_handler()
+    app.add_handler(birthday_handler, group=next(group_count))
 
     logger.warning(
         f"starting telegram bot, is_production={is_production}"
