@@ -68,7 +68,7 @@ def get_meals_eaten_view_conversation_handler(new_meal_conversation_handler):
 
     fallbacks = [
         CommandHandler(Commands.CANCEL.value, handle_cancel),
-        CommandHandler(Commands.START.value, start_menu_utils.handle_return_to_start),
+        CommandHandler(Commands.START.value, handle_return_to_start),
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
@@ -274,3 +274,8 @@ async def handle_cancel(update, context):
         )
 
     return ConversationHandler.END
+
+
+async def handle_return_to_start(update, context):
+    await meals_dataview_utils.deactivate_dataview_message(context)
+    return await start_menu_utils.handle_return_to_start(update, context)
