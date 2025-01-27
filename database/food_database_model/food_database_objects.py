@@ -1,4 +1,7 @@
+from decimal import Decimal
 from typing import List, Optional
+
+import dateparser
 import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -178,6 +181,16 @@ class User(Base):
         )
         return now
 
+    def parse_datetime(self, text):
+        # dateparser can handle today / yesterday word
+        return dateparser.parse(
+            text,
+            settings={
+                "DATE_ORDER": "DMY",
+                "TIMEZONE": self.timezone_obj.timezone
+            }
+        )
+
     def get_age(self):
         now = self.get_datetime_now()
         date_now = now.date()
@@ -248,30 +261,42 @@ class MealEaten(Base):
         else:
             return self.describe_short(with_time)
 
-    def _time_description_line(self, with_time):
-        if with_time and self.created_local_datetime is not None:
-            time_entry = self.created_local_datetime.strftime("%d %b %Y %H:%M")
-            time_line = f" - Saved at: {time_entry}\n"
+    def _time_description_line(self):
+        if self.created_local_datetime is not None:
+            time_entry = self.created_local_datetime.strftime("%a %d %b %Y %H:%M")
+            time_line = f" - Added at: {time_entry}"
         else:
             time_line = ""
         return time_line
 
+    def describe_no_nutrition(self, with_time=True):
+        if with_time:
+            time_line = self._time_description_line()
+        else:
+            time_line = ""
+
+        if len(time_line) > 0:
+            time_line = "\n" + time_line
+
+        description = (
+            f" - Name: {self.name}\n" +
+            f" - Description: {self.description}" +
+            time_line
+        )
+        return description
+
     def describe_short(self, with_time=True):
         description = (
             "Meal data:\n" +
-            f" - Name: {self.name}\n" +
-            f" - Description: {self.description}\n" +
-            self._time_description_line(with_time)
+            self.describe_no_nutrition(with_time=with_time) + "\n"
         )
         description = description + self.describe_nutrition_only_short()
         return description
 
     def describe_long(self, with_time=True):
         description = (
-            "Meal data:\n" +
-            f" - Name: {self.name}\n" +
-            f" - Description: {self.description}\n" +
-            self._time_description_line(with_time)
+            "Meal data:\n"+
+            self.describe_no_nutrition(with_time=with_time) + "\n"
         )
         description = description + self.describe_nutrition_only_long()
         return description
@@ -292,11 +317,11 @@ class MealEaten(Base):
         return description
 
     def describe_nutrition_only_long(self):
-        total_nutrition = self.fat + self.carbs + self.protein
+        total_nutrition = sum(Decimal(v) for v in [self.fat, self.carbs, self.protein])
         if total_nutrition > 0:
-            p_fat = self.fat / total_nutrition * 100
-            p_carbs = self.carbs / total_nutrition * 100
-            p_protein = self.protein / total_nutrition * 100
+            p_fat = Decimal(self.fat) / total_nutrition * 100
+            p_carbs = Decimal(self.carbs) / total_nutrition * 100
+            p_protein = Decimal(self.protein) / total_nutrition * 100
         else:
             p_fat = p_carbs = p_protein = 0
 

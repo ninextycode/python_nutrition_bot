@@ -10,6 +10,19 @@ def add_new_eaten_meal(
     session.commit()
 
 
+def update_eaten_meal(session, meal):
+    if meal.id is None:
+        raise ValueError("Meal ID is None, cannot update")
+
+    object_exists = session.scalar(sa.select(True).where(MealEaten.id == meal.id))
+    if object_exists is None:
+        raise ValueError("Meal to be updated does not exist")
+
+    updated_meal = session.merge(meal)
+    session.commit()
+    return updated_meal
+
+
 def add_new_meal_for_future_use(
     session, meal_for_future_use
 ):

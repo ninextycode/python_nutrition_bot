@@ -5,6 +5,7 @@ from chatbot.dialog_utils import TextEnum
 
 # used to handle child conversation endings in patent conversations
 class ChildEndStage(Enum):
+    RETURN_TO_START = auto()
     NEW_MEAL_END = auto()
     MEALS_EATEN_VIEW_END = auto()
 
@@ -18,6 +19,7 @@ class ConversationID(TextEnum):
     USER_DATA = auto()
     NUTRITION = auto()
     NEW_MEAL = auto()
+    EDIT_MEAL = auto()
 
 
 def set_parent_data(context, parent_id, child_id, data):

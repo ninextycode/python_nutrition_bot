@@ -21,7 +21,7 @@ def init_sqlalchemy_engine():
 
 def get_session():
     global _engine
-    return sa.orm.Session(_engine)
+    return sa.orm.Session(_engine, expire_on_commit=False)
 
 
 def validate_table_name(table_name):

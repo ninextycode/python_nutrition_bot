@@ -3,7 +3,7 @@ from telegram.ext import CommandHandler
 from chatbot.config import secret, Commands, is_production
 from chatbot.user.new_user_data import get_new_user_update_user_conv_handlers
 from chatbot.start_menu.start_menu import get_start_menu_conversation_handler
-from chatbot.meal.new_meal.new_meal_data import get_new_meal_conversation_handler
+from chatbot.meal.new_meal.new_meal import get_new_meal_conversation_handler
 from chatbot.meal.meals_dataview.meals_eaten_dataview import (
     get_meals_eaten_view_conversation_handler
 )
@@ -34,7 +34,6 @@ async def start_handler(update, context):
 
 def run_bot():
     app = ApplicationBuilder().token(secret).build()
-    # config.bot_info = asyncio.run(app.bot.get_me())
 
     new_user_handler, update_user_handler = \
         get_new_user_update_user_conv_handlers()
@@ -47,14 +46,14 @@ def run_bot():
     view_meals_eaten_handler = get_meals_eaten_view_conversation_handler(
         new_meal_handler
     )
-    show_user_data_handler = CommandHandler(
-        Commands.GET_USER_DATA.value, get_existing_user_data
-    )
+    # show_user_data_handler = CommandHandler(
+    #     Commands.GET_USER_DATA.value, get_existing_user_data
+    # )
     existing_user_handlers = [
         update_user_handler,
         new_meal_handler,
         view_meals_eaten_handler,
-        show_user_data_handler
+        # show_user_data_handler
     ]
 
 
@@ -67,23 +66,10 @@ def run_bot():
         new_user_handlers + existing_user_handlers
 
     for conv_handler in all_conv_handlers:
-        app.add_handler(conv_handler)
-
-
-
-    #
-    # app.add_handler(new_meal_handler, group=next(group_count))
-    # app.add_handler(view_meals_eaten_handler, group=next(group_count))
-    #
-    # app.add_handler(show_user_data_handler, group=next(group_count))
-    #
-    # delete_user_handler = CommandHandler(
-    #     Commands.DELETE_USER.value, delete_user
-    # )
-    # app.add_handler(delete_user_handler, group=next(group_count))
+        app.add_handler(conv_handler, group=0)
 
     birthday_handler = get_birthday_handler()
-    app.add_handler(birthday_handler, group=next(group_count))
+    app.add_handler(birthday_handler, group=1)
 
     logger.warning(
         f"starting telegram bot, is_production={is_production}"

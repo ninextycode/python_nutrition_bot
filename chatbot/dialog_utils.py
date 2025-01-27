@@ -105,15 +105,14 @@ def pass_exception_if_message_not_modified(e):
 
 
 def parse_nutrition_message(text, nutrition_entries=NutritionType):
-    separators = [" ", ",", "/", r"\n", r"\\", "|"]
-    separators_merged = "".join(separators)
-    blocks = [b for b in re.split(rf"[{separators_merged}]", text) if len(b) > 0]
+    blocks = text.split(",")
     values = []
 
     for block in blocks:
-        # allow users to skip nutrition entries, substitute zeros
+        block = block.strip()
+        # allow users to skip nutrition entries, substitute None
         if len(block) == 0:
-            values.append(0)
+            values.append(None)
             continue
 
         try:
@@ -124,11 +123,14 @@ def parse_nutrition_message(text, nutrition_entries=NutritionType):
         values.append(value)
 
     while len(values) < len(nutrition_entries):
-        values.append(0)
+        values.append(None)
 
     data = {}
     for t, value in zip(nutrition_entries, values):
-        data[t] = max(0, value)  # treat negative values like zeroes
+        if value is not None:
+            data[t] = max(0, value)  # treat negative values like zeroes
+        else:
+            data[t] = None
 
     return data
 

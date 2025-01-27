@@ -35,8 +35,8 @@ class NewUserStages(Enum):
     CONFIRM_NAME = auto()
     NAME = auto()
     GENDER = auto()
-    DATE_OF_BIRTH = auto()
     TIMEZONE = auto()
+    DATE_OF_BIRTH = auto()
     HEIGHT = auto()
     WEIGHT = auto()
     ACTIVITY_LEVEL = auto()
@@ -50,14 +50,12 @@ class NewUserStages(Enum):
 def get_new_user_update_user_conv_handlers():
     text_only_filter = filters.TEXT & ~filters.COMMAND
     new_user_entry_points = [
-        CommandHandler(Commands.NEW_USER.value, handle_new_user_command),
         CallbackQueryHandler(
             callback=handle_new_user_command,
             pattern=StartConversationDataKey.NEW_USER.value
         )
     ]
     update_user_entry_points = [
-        CommandHandler(Commands.UPDATE_USER.value, handle_update_user_command),
         CallbackQueryHandler(
             callback=handle_update_user_command,
             pattern=StartConversationDataKey.UPDATE_USER.value
@@ -68,9 +66,9 @@ def get_new_user_update_user_conv_handlers():
         NewUserStages.CONFIRM_NAME: [MessageHandler(text_only_filter, handle_confirm_name)],
         NewUserStages.NAME: [MessageHandler(text_only_filter, handle_name_choice)],
         NewUserStages.GENDER: [MessageHandler(text_only_filter, handle_gender)],
-        NewUserStages.DATE_OF_BIRTH: [MessageHandler(text_only_filter, handle_date_of_birth)],
         NewUserStages.TIMEZONE: [MessageHandler(filters.LOCATION, handle_timezone),
                                  MessageHandler(text_only_filter, handle_timezone)],
+        NewUserStages.DATE_OF_BIRTH: [MessageHandler(text_only_filter, handle_date_of_birth)],
         NewUserStages.HEIGHT: [MessageHandler(text_only_filter, handle_height)],
         NewUserStages.WEIGHT: [MessageHandler(text_only_filter, handle_weight)],
         NewUserStages.ACTIVITY_LEVEL: [MessageHandler(text_only_filter, handle_activity_level)],
@@ -114,6 +112,10 @@ def get_new_user_update_user_conv_handlers():
 
 
 async def handle_new_user_command(update, context):
+    if update.callback_query is not None:
+        await dialog_utils.handle_inline_keyboard_callback(
+            update, True
+        )
     context.user_data[DataKeys.USER_DATA] = dict()
     user_data = context.user_data[DataKeys.USER_DATA]
 
@@ -153,6 +155,10 @@ async def check_reg_password(update, context):
 
 
 async def handle_update_user_command(update, context):
+    if update.callback_query is not None:
+        await dialog_utils.handle_inline_keyboard_callback(
+            update, True
+        )
     context.user_data[DataKeys.USER_DATA] = dict()
     user_data = context.user_data[DataKeys.USER_DATA]
 
@@ -162,8 +168,14 @@ async def handle_update_user_command(update, context):
         await dialog_utils.user_does_not_exist_message(update)
         return ConversationHandler.END
 
+    telegram_id = None
+    if update.message is not None:
+        telegram_id = update.message.from_user.id
+    elif update.callback_query is not None:
+        telegram_id = update.callback_query.from_user.id
+
     new_user = User(
-        telegram_id=update.message.from_user.id,
+        telegram_id=telegram_id,
         name=old_user.name
     )
 
@@ -233,41 +245,6 @@ async def handle_gender(update, context):
     new_user.gender_obj = MaleFemaleSqlEntry[MaleFemaleOption(gender).name].value
 
     if old_user is not None:
-        existing_dob = old_user.date_of_birth
-    else:
-        existing_dob = None
-
-    await user_utils.ask_date_of_birth_question(update, existing_dob)
-    return NewUserStages.DATE_OF_BIRTH
-
-
-async def handle_date_of_birth(update, context):
-    user_data = context.user_data[DataKeys.USER_DATA]
-    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
-    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
-
-    date_of_birth_str = update.message.text
-
-    if date_of_birth_str == NewValueOption.NEW_VALUE:
-        await user_utils.ask_date_of_birth_question(update)
-        return NewUserStages.DATE_OF_BIRTH
-
-    datetime_dob = dateparser.parse(
-        date_of_birth_str, settings={'DATE_ORDER': 'DMY'}
-    )
-    if datetime_dob is None:
-        await dialog_utils.wrong_value_message(update)
-        await user_utils.ask_date_of_birth_question(update)
-        return NewUserStages.DATE_OF_BIRTH
-
-    dob_date = datetime_dob.date()
-    new_user.date_of_birth = dob_date
-
-    await dialog_utils.no_markup_message(
-        update, f"Your date of birth is {dob_date.strftime('%d-%B-%Y')}"
-    )
-
-    if old_user is not None:
         existing_tz = old_user.timezone_obj.timezone
     else:
         existing_tz = None
@@ -308,6 +285,42 @@ async def handle_timezone(update, context):
 
     await dialog_utils.no_markup_message(
         update, f"Your timezone is {timezone_str}"
+    )
+
+    if old_user is not None:
+        existing_dob = old_user.date_of_birth
+    else:
+        existing_dob = None
+
+    await user_utils.ask_date_of_birth_question(update, existing_dob)
+    return NewUserStages.DATE_OF_BIRTH
+
+
+async def handle_date_of_birth(update, context):
+    user_data = context.user_data[DataKeys.USER_DATA]
+    new_user: User = user_data[UserDataEntry.NEW_USER_OBJECT]
+    old_user: User = user_data.get(UserDataEntry.OLD_USER_OBJECT, None)
+
+    date_of_birth_str = update.message.text
+
+    if date_of_birth_str == NewValueOption.NEW_VALUE:
+        await user_utils.ask_date_of_birth_question(update)
+        return NewUserStages.DATE_OF_BIRTH
+
+    datetime_dob = new_user.parse_datetime(
+        update.message.text
+    )
+
+    if datetime_dob is None:
+        await dialog_utils.wrong_value_message(update)
+        await user_utils.ask_date_of_birth_question(update)
+        return NewUserStages.DATE_OF_BIRTH
+
+    dob_date = datetime_dob.date()
+    new_user.date_of_birth = dob_date
+
+    await dialog_utils.no_markup_message(
+        update, f"Your date of birth is {dob_date.strftime('%d-%B-%Y')}"
     )
 
     if old_user is not None:
@@ -524,7 +537,8 @@ async def process_new_user_data(update, context):
         with common_sql.get_session() as session:
             if old_user is not None:
                 new_user.id = old_user.id
-                update_users.update_user(session, new_user)
+                updated_user = update_users.update_user(session, new_user)
+                user_data[UserDataEntry.NEW_USER_OBJECT] = updated_user
             else:
                 update_users.add_new_user(session, new_user)
         await dialog_utils.no_markup_message(update, "New data added")

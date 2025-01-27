@@ -30,6 +30,8 @@ def get_start_menu_conversation_handler(
         ChildEndStage.NEW_MEAL_END: \
             existing_user_command_handlers,
         ChildEndStage.MEALS_EATEN_VIEW_END: \
+            existing_user_command_handlers,
+        ChildEndStage.RETURN_TO_START: \
             existing_user_command_handlers
     }
 
@@ -37,7 +39,7 @@ def get_start_menu_conversation_handler(
         states[k].extend(entry_points)
 
     fallbacks = [
-        CommandHandler("cancel", handle_cancel),
+        CommandHandler(Commands.CANCEL.value, handle_cancel)
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
@@ -48,10 +50,7 @@ def get_start_menu_conversation_handler(
 
 
 async def create_start_options(update, callback):
-    await dialog_utils.no_markup_message(update, "starting")
-
     user = dialog_utils.get_tg_user_obj(update)
-
     if user is None:
         await start_menu_utils.send_new_user_options(update)
         return StartStages.NEW_USER_CHOOSE_ACTION

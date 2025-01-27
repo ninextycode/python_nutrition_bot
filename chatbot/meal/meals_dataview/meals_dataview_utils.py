@@ -1,5 +1,3 @@
-import datetime
-
 from database.common_sql import get_session
 from enum import Enum, auto
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -7,7 +5,6 @@ from database.food_database_model import MealEaten, NutritionType
 from database.select import select_meals
 from chatbot import dialog_utils
 from chatbot.config import DataKeys
-import telegram.error
 import logging
 from chatbot import inline_key_utils
 from chatbot.inline_key_utils import (
@@ -49,7 +46,6 @@ class SingleMealActionBtnValue(InlineButtonDataValueGroup):
     DELETE_MEAL = auto()
     CONFIRM_DELETE_MEAL = auto()
     BACK_TO_SINGLE_MEAL_VIEW = auto()
-    # EDIT_MEAL = auto() TODO
     BACK_TO_DAY_VIEW = auto()
 
 
@@ -103,7 +99,7 @@ def get_meals_inline_keyboard_markup(meals: list[MealEaten], context):
     food_button_rows = [[b] for b in buttons]
     add_meal_button = [
         InlineKeyboardButton(
-            "Start menu",
+            "To start menu",
             callback_data=DayViewNavigationBtnValue.BACK_TO_START_MENU.to_key_value_str()
         ),
         InlineKeyboardButton(
@@ -160,35 +156,36 @@ async def ask_for_date(update):
     await dialog_utils.no_markup_message(update, question)
 
 
-async def show_single_meal(update, context, meal: MealEaten):
-    message = get_single_meal_message(meal) + "\n"
-    reply_markup = single_meal_inline_keyboard_markup(meal.id)
-    await send_dataview_message(update, context, message, reply_markup, update_existing=True)
+async def show_single_meal(update, context, meal: MealEaten, update_existing=True):
+    message = meal.describe() + "\n"
+    reply_markup = single_meal_inline_keyboard_markup(context, meal.id)
+    await send_dataview_message(
+        update, context, message, reply_markup, update_existing=update_existing
+    )
 
 
-def single_meal_inline_keyboard_markup(meal_id):
+def single_meal_inline_keyboard_markup(context, meal_id):
+    set_parent_data(context, ConversationID.SINGLE_MEAL_VIEW, ConversationID.EDIT_MEAL, meal_id)
     return inline_key_utils.inline_keys_markup(
         ["Delete", "Edit", "Back"],
         [
             SingleMealActionBtnValue.DELETE_MEAL.to_key_value_str(),
-            StartConversationDataKey.EDIT_MEAL.to_str(meal_id),
+            StartConversationDataKey.EDIT_MEAL.to_str(
+                ConversationID.SINGLE_MEAL_VIEW.value
+            ),
             SingleMealActionBtnValue.BACK_TO_DAY_VIEW.to_key_value_str()
         ]
     )
 
 
 async def ask_for_delete_confirmation(update, context, meal: MealEaten):
-    meal_description = get_single_meal_message(meal)
+    meal_description = meal.describe()
     question = "Confirm meal entry deletion?"
     message = meal_description + "\n\n" + question
     await send_dataview_message(
         update, context, message,
         delete_confirmation_markup(), update_existing=True
     )
-
-
-def get_single_meal_message(meal):
-    return meal.describe()
 
 
 def delete_confirmation_markup():

@@ -4,6 +4,7 @@ from telegram.ext import ConversationHandler, CallbackQueryHandler, MessageHandl
 from enum import Enum, auto
 from chatbot.config import Commands
 from chatbot.inline_key_utils import InlineButtonDataKeyValue, StartConversationDataKey
+from database.food_database_model import User
 from database.update import update_meals
 from chatbot import dialog_utils
 from database.common_sql import get_session
@@ -33,9 +34,6 @@ class MealsEatenViewStages(Enum):
 def get_meals_eaten_view_conversation_handler(new_meal_conversation_handler):
     text_only_filter = filters.TEXT & ~filters.COMMAND
     entry_points = [
-        CommandHandler(
-            Commands.VIEW_MEALS_EATEN.value, open_meals_eaten_view
-        ),
         CallbackQueryHandler(
             handle_inline_key_start_callback,
             pattern=StartConversationDataKey.VIEW_EATEN_MEALS.value
@@ -69,15 +67,16 @@ def get_meals_eaten_view_conversation_handler(new_meal_conversation_handler):
         states[k].extend(entry_points)
 
     fallbacks = [
-        CommandHandler("cancel", handle_cancel),
-        MessageHandler(filters.COMMAND, handle_cancel)
+        CommandHandler(Commands.CANCEL.value, handle_cancel),
+        CommandHandler(Commands.START.value, start_menu_utils.handle_return_to_start),
     ]
     handler = ConversationHandler(
         entry_points=entry_points,
         states=states,
         fallbacks=fallbacks,
         map_to_parent={
-            ConversationHandler.END: ChildEndStage.MEALS_EATEN_VIEW_END
+            ConversationHandler.END: ChildEndStage.MEALS_EATEN_VIEW_END,
+            ChildEndStage.RETURN_TO_START: ChildEndStage.RETURN_TO_START
         }
     )
     return handler
@@ -85,7 +84,7 @@ def get_meals_eaten_view_conversation_handler(new_meal_conversation_handler):
 
 async def handle_inline_key_start_callback(update, context):
     await dialog_utils.handle_inline_keyboard_callback(
-        update
+        update, delete_keyboard=True
     )
     return await open_meals_eaten_view(update, context)
 
@@ -180,16 +179,8 @@ async def handle_open_single_meal_callback(update, context):
 
 async def handle_date(update, context):
     dialog_data = context.user_data[DataKeys.MEALS_EATEN_DATAVIEW]
-    # dateparser can handle today / yesterday word
-    date_str = update.message.text
-    timezone_str = dialog_data[MealsEatenViewDataEntry.USER].timezone_obj.timezone
-    datetime_obj = dateparser.parse(
-        date_str,
-        settings={
-            "DATE_ORDER": "DMY",
-            "TIMEZONE": timezone_str
-        }
-    )
+    user: User = dialog_data[MealsEatenViewDataEntry.USER]
+    datetime_obj = user.parse_datetime(update.message.text)
 
     if datetime_obj is None:
         await dialog_utils.wrong_value_message(update)

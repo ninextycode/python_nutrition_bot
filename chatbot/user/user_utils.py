@@ -51,7 +51,7 @@ async def ask_question(update, question, old_answers=None):
     else:
         reply_markup = old_value_or_enter_new_markup(old_answers)
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         question, reply_markup=reply_markup
     )
 
@@ -85,13 +85,13 @@ async def ask_date_of_birth_question(update, old_date=None):
 
 
 async def ask_for_password(update):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "Enter registration password", reply_markup=ReplyKeyboardRemove()
     )
 
 
 async def ask_to_confirm_existing_name(update, existing_name):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"Hi {existing_name}!\n" +
         "Is this your correct name?",
         reply_markup=dialog_utils.yes_no_markup(),
@@ -105,7 +105,7 @@ async def ask_name_choice(update, old_names=None):
 
 
 async def ask_gender_question(update):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "Please select your gender",
         reply_markup=male_female_markup()
     )
@@ -131,7 +131,7 @@ async def ask_weight_question(update, old_weight=None):
 
 
 async def ask_goal_question(update):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "What is your goal?",
         reply_markup=goal_markup()
     )
@@ -148,7 +148,7 @@ def goal_markup():
 
 
 async def ask_timezone_question(update, old_timezone=None):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         (
             "Let's determine your timezone.\n"
             "If you cannot send location, type and send your timezone name.\n"
@@ -249,7 +249,7 @@ def get_height_cm(height_str):
 
 async def ask_activity_level(update):
     question = "Choose your activity level"
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         question, reply_markup=activity_level_markup()
     )
 
@@ -266,7 +266,7 @@ def activity_level_markup():
 
 async def ask_if_keto(update):
     question = "Keto diet?"
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         question, reply_markup=dialog_utils.yes_no_markup()
     )
 
@@ -304,7 +304,7 @@ async def ask_to_confirm_target(update, user_target_obj: UserTarget):
     message = user_target_obj.describe()
     await dialog_utils.no_markup_message(update, message)
     question = "Confirm nutrition target?"
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         question, reply_markup=confirm_target_markup()
     )
 
@@ -334,7 +334,7 @@ async def ask_to_enter_target_manually(update):
 
 async def ask_target_type(update):
     question = "Choose nutrition target type"
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         question, reply_markup=target_type_markup()
     )
 

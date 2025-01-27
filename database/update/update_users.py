@@ -21,8 +21,9 @@ def update_user(session, user):
     #
     # It's possible to use partially constructed object in merge function to
     # make an update to only a subset of values, leaving other values intact
-    session.merge(user)
+    updated_user = session.merge(user)
     session.commit()
+    return updated_user
 
 
 def activate_user(session, user_id):
